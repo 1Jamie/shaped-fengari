@@ -44,11 +44,6 @@ jobs:
         env:
           FENGARICONF: '{"LUAI_MAXSTACK":100000}'
 
-      - name: Package standalone distribution archives
-        run: |
-          tar -czvf shaped-fengari-dist.tar.gz -C dist .
-          zip -r shaped-fengari-dist.zip dist/
-
       - name: Determine tag name
         id: vars
         run: |
@@ -61,6 +56,18 @@ jobs:
             echo "tag=v${VERSION}" >> $GITHUB_OUTPUT
           fi
 
+      - name: Package distribution archives
+        run: |
+          TAG="${{ steps.vars.outputs.tag }}"
+          PACKAGE_NAME="shaped-fengari-${TAG}"
+          rm -rf pkg "${PACKAGE_NAME}.tar.gz" "${PACKAGE_NAME}.zip"
+          mkdir -p "pkg/${PACKAGE_NAME}"
+          cp -r dist "pkg/${PACKAGE_NAME}/"
+          cp README.md LICENSE package.json "pkg/${PACKAGE_NAME}/"
+          tar -czvf "${PACKAGE_NAME}.tar.gz" -C pkg "${PACKAGE_NAME}"
+          (cd pkg && zip -r "../${PACKAGE_NAME}.zip" "${PACKAGE_NAME}")
+          rm -rf pkg
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -68,24 +75,9 @@ jobs:
           name: Release ${{ steps.vars.outputs.tag }}
           generate_release_notes: true
           files: |
-            dist/shaped-fengari.js
-            dist/shaped-fengari.js.map
             dist/shaped-fengari.min.js
-            dist/shaped-fengari.min.js.map
-            dist/shaped-fengari.mjs
-            dist/shaped-fengari.mjs.map
-            dist/shaped-fengari.min.mjs
-            dist/shaped-fengari.min.mjs.map
-            dist/shaped-fengari.esm.js
-            dist/shaped-fengari.esm.js.map
-            dist/shaped-fengari.esm.min.js
-            dist/shaped-fengari.esm.min.js.map
-            dist/shaped-fengari.cjs
-            dist/shaped-fengari.cjs.map
-            dist/fengari.js
-            dist/fengari.min.js
-            shaped-fengari-dist.tar.gz
-            shaped-fengari-dist.zip
+            shaped-fengari-*.tar.gz
+            shaped-fengari-*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
