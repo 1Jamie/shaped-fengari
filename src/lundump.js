@@ -282,6 +282,7 @@ const luaU_undump = function(L, Z, name) {
     let cl = lfunc.luaF_newLclosure(L, S.LoadByte());
     ldo.luaD_inctop(L);
     L.stack[L.top-1].setclLvalue(cl);
+    if (L.stack.syncFromTValue) L.stack.syncFromTValue(L.top - 1);
     cl.p = new lfunc.Proto(L);
     S.LoadFunction(cl.p, null);
     lua_assert(cl.nupvalues === cl.p.upvalues.length);

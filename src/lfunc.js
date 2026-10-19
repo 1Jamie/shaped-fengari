@@ -28,15 +28,24 @@ const luaF_newLclosure = function(L, n) {
 
 
 const luaF_findupval = function(L, level) {
-    return L.stack[level];
+    let tv = L.stack[level];
+    if (tv) {
+        tv.ownerStack = L.stack;
+        tv.ownerSlot = level;
+    }
+    return tv;
 };
 
 const luaF_close = function(L, level) {
     /* Create new TValues on stack;
      * any closures will keep referencing old TValues */
-    for (let i=level; i<L.top; i++) {
+    for (let i = level; i < L.top; i++) {
         let old = L.stack[i];
-        L.stack[i] = new lobject.TValue(old.type, old.value);
+        if (old) {
+            old.ownerStack = null;
+            old.ownerSlot = -1;
+        }
+        L.stack[i] = new lobject.TValue(old ? old.type : 0, old ? old.value : null);
     }
 };
 

@@ -130,7 +130,7 @@ const luaT_callTM = function(L, f, p1, p2, p3, hasres) {
 
     if (hasres) {  /* if has result, move it to its place */
         let tv = L.stack[L.top-1];
-        delete L.stack[--L.top];
+        --L.top;
         p3.setfrom(tv);
     }
 };

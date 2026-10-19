@@ -49,11 +49,25 @@ const { MBuffer } = require('./lzio.js');
 
 const adjust_top = function(L, newtop) {
     if (L.top < newtop) {
-        while (L.top < newtop)
-            L.stack[L.top++] = new lobject.TValue(LUA_TNIL, null);
+        const stack = L.stack;
+        const tags = stack ? stack.tags : null;
+        while (L.top < newtop) {
+            let slot = stack[L.top];
+            if (slot) {
+                slot.type = LUA_TNIL;
+                slot.value = null;
+            } else {
+                stack[L.top] = new lobject.TValue(LUA_TNIL, null);
+            }
+            if (tags) {
+                tags[L.top] = LUA_TNIL;
+                stack.valsF64[L.top] = 0;
+                stack.refs[L.top] = null;
+            }
+            L.top++;
+        }
     } else {
-        while (L.top > newtop)
-            delete L.stack[--L.top];
+        L.top = newtop;
     }
 };
 
@@ -61,8 +75,16 @@ const seterrorobj = function(L, errcode, oldtop) {
     let current_top = L.top;
 
     /* extend stack so that L.stack[oldtop] is sure to exist */
-    while (L.top < oldtop + 1)
-        L.stack[L.top++] = new lobject.TValue(LUA_TNIL, null);
+    while (L.top < oldtop + 1) {
+        let slot = L.stack[L.top];
+        if (slot) {
+            slot.type = LUA_TNIL;
+            slot.value = null;
+        } else {
+            L.stack[L.top] = new lobject.TValue(LUA_TNIL, null);
+        }
+        L.top++;
+    }
 
     switch (errcode) {
         case LUA_ERRMEM: {
@@ -78,8 +100,8 @@ const seterrorobj = function(L, errcode, oldtop) {
         }
     }
 
-    while (L.top > oldtop + 1)
-        delete L.stack[--L.top];
+    if (L.top > oldtop + 1)
+        L.top = oldtop + 1;
 };
 
 const ERRORSTACKSIZE = LUAI_MAXSTACK + 200;
@@ -87,7 +109,19 @@ const ERRORSTACKSIZE = LUAI_MAXSTACK + 200;
 const luaD_reallocstack = function(L, newsize) {
     lua_assert(newsize <= LUAI_MAXSTACK || newsize == ERRORSTACKSIZE);
     lua_assert(L.stack_last == L.stack.length - lstate.EXTRA_STACK);
+    let oldsize = L.stack.length;
+    if (L.stack.grow && newsize > L.stack.capacity) {
+        L.stack.grow(newsize);
+    }
     L.stack.length = newsize;
+    for (let i = oldsize; i < newsize; i++) {
+        L.stack[i] = new lobject.TValue(LUA_TNIL, null);
+        if (L.stack.tags) {
+            L.stack.tags[i] = LUA_TNIL;
+            L.stack.valsF64[i] = 0;
+            L.stack.refs[i] = null;
+        }
+    }
     L.stack_last = newsize - lstate.EXTRA_STACK;
 };
 
@@ -138,7 +172,11 @@ const luaD_shrinkstack = function(L) {
 
 const luaD_inctop = function(L) {
     luaD_checkstack(L, 1);
-    L.stack[L.top++] = new lobject.TValue(LUA_TNIL, null);
+    if (L.stack.setNil)
+        L.stack.setNil(L.top);
+    else
+        L.stack[L.top] = new lobject.TValue(LUA_TNIL, null);
+    L.top++;
 };
 
 /*
@@ -157,7 +195,12 @@ const luaD_precall = function(L, off, nresults) {
             let f = func.type === LUA_TCCL ? func.value.f : func.value;
 
             luaD_checkstack(L, LUA_MINSTACK);
-            let ci = lstate.luaE_extendCI(L);
+            let ci = L.ci.next;
+            if (ci === null) {
+                ci = lstate.luaE_extendCI(L);
+            } else {
+                L.ci = ci;
+            }
             ci.funcOff = off;
             ci.nresults = nresults;
             ci.func = func;
@@ -184,21 +227,40 @@ const luaD_precall = function(L, off, nresults) {
             if (p.is_vararg) {
                 base = adjust_varargs(L, p, n);
             } else {
-                for (; n < p.numparams; n++)
-                    L.stack[L.top++] = new lobject.TValue(LUA_TNIL, null); // complete missing arguments
+                for (; n < p.numparams; n++) {
+                    let slot = L.stack[L.top];
+                    if (slot) {
+                        slot.type = LUA_TNIL;
+                        slot.value = null;
+                    }
+                    if (L.stack.tags) {
+                        L.stack.tags[L.top] = LUA_TNIL;
+                        L.stack.valsF64[L.top] = 0;
+                        L.stack.refs[L.top] = null;
+                    }
+                    L.top++;
+                }
                 base = off + 1;
             }
 
-            let ci = lstate.luaE_extendCI(L);
+            let ci = L.ci.next;
+            if (ci === null) {
+                ci = lstate.luaE_extendCI(L);
+            } else {
+                L.ci = ci;
+            }
             ci.funcOff = off;
             ci.nresults = nresults;
             ci.func = func;
             ci.l_base = base;
-            ci.top = base + fsize;
-            adjust_top(L, ci.top);
+            L.top = ci.top = base + fsize;
             ci.l_code = p.code;
             ci.l_savedpc = 0;
             ci.callstatus = lstate.CIST_LUA;
+            if (L.cfs) {
+                ci.cfs_ptr = L.cfs.ptr;
+                L.cfs.push(off, base, ci.top, 0, nresults, lstate.CIST_LUA, func);
+            }
             if (L.hookmask & LUA_MASKCALL)
                 callhook(L, ci);
             return false;
@@ -221,7 +283,27 @@ const luaD_poscall = function(L, ci, firstResult, nres) {
 
     let res = ci.funcOff;
     L.ci = ci.previous;
-    L.ci.next = null;
+    if (L.cfs && L.cfs.ptr > 0) {
+        L.cfs.pop();
+    }
+
+    if (wanted === 1) {
+        if (nres === 1) {
+            if (res !== firstResult) {
+                L.stack.copy(res, firstResult);
+            }
+            L.top = res + 1;
+            return true;
+        } else if (nres === 0) {
+            if (L.stack.setNil)
+                L.stack.setNil(res);
+            else
+                L.stack[res].setnilvalue();
+            L.top = res + 1;
+            return true;
+        }
+    }
+
     return moveresults(L, firstResult, res, nres, wanted);
 };
 
@@ -230,9 +312,12 @@ const moveresults = function(L, firstResult, res, nres, wanted) {
         case 0:
             break;
         case 1: {
-            if (nres === 0)
-                L.stack[res].setnilvalue();
-            else {
+            if (nres === 0) {
+                if (L.stack.setNil)
+                    L.stack.setNil(res);
+                else
+                    L.stack[res].setnilvalue();
+            } else {
                 lobject.setobjs2s(L, res, firstResult); /* move it to proper place */
             }
             break;
@@ -240,8 +325,6 @@ const moveresults = function(L, firstResult, res, nres, wanted) {
         case LUA_MULTRET: {
             for (let i = 0; i < nres; i++)
                 lobject.setobjs2s(L, res + i, firstResult + i);
-            for (let i=L.top; i>=(res + nres); i--)
-                delete L.stack[i];
             L.top = res + nres;
             return false;
         }
@@ -254,18 +337,23 @@ const moveresults = function(L, firstResult, res, nres, wanted) {
                 for (i = 0; i < nres; i++)
                     lobject.setobjs2s(L, res + i, firstResult + i);
                 for (; i < wanted; i++) {
-                    if (res+i >= L.top)
-                        L.stack[res + i] = new lobject.TValue(LUA_TNIL, null);
-                    else
-                        L.stack[res + i].setnilvalue();
+                    if (L.stack.setNil) {
+                        L.stack.setNil(res + i);
+                    } else {
+                        let slot = L.stack[res + i];
+                        if (!slot)
+                            L.stack[res + i] = new lobject.TValue(LUA_TNIL, null);
+                        else {
+                            slot.type = LUA_TNIL;
+                            slot.value = null;
+                        }
+                    }
                 }
             }
             break;
         }
     }
     let newtop = res + wanted; /* top points after the last result */
-    for (let i=L.top; i>=newtop; i--)
-        delete L.stack[i];
     L.top = newtop;
     return true;
 };
@@ -319,12 +407,31 @@ const adjust_varargs = function(L, p, actual) {
 
     let i;
     for (i = 0; i < nfixargs && i < actual; i++) {
-        lobject.pushobj2s(L, L.stack[fixed + i]);
-        L.stack[fixed + i].setnilvalue();
+        let dst = L.top++;
+        let src = fixed + i;
+        if (L.stack.copy) {
+            L.stack.copy(dst, src);
+            L.stack.setNil(src);
+        } else {
+            lobject.pushobj2s(L, L.stack[src]);
+            L.stack[src].setnilvalue();
+        }
     }
 
-    for (; i < nfixargs; i++)
-        L.stack[L.top++] = new lobject.TValue(LUA_TNIL, null);
+    for (; i < nfixargs; i++) {
+        let dst = L.top++;
+        if (L.stack.setNil) {
+            L.stack.setNil(dst);
+        } else {
+            let slot = L.stack[dst];
+            if (slot) {
+                slot.type = LUA_TNIL;
+                slot.value = null;
+            } else {
+                L.stack[dst] = new lobject.TValue(LUA_TNIL, null);
+            }
+        }
+    }
 
     return base;
 };
@@ -376,8 +483,13 @@ const luaD_throw = function(L, errcode) {
         let g = L.l_G;
         L.status = errcode;  /* mark it as dead */
         if (g.mainthread.errorJmp) {  /* main thread has a handler? */
-            g.mainthread.stack[g.mainthread.top++] = L.stack[L.top - 1];  /* copy error obj. */
-            luaD_throw(g.mainthread, errcode);  /* re-throw in main thread */
+            let errObj = (L.stack && L.stack.getTValue) ? L.stack.getTValue(L.top - 1) : L.stack[L.top - 1];
+            let mt = g.mainthread;
+            let dst = mt.top++;
+            mt.stack[dst] = new lobject.TValue(errObj.type, errObj.value);
+            if (mt.stack && mt.stack.syncFromTValue)
+                mt.stack.syncFromTValue(dst);
+            luaD_throw(mt, errcode);  /* re-throw in main thread */
         } else {  /* no handler at all; abort */
             let panic = g.panic;
             if (panic) {  /* panic function? */
@@ -517,6 +629,7 @@ const recover = function(L, status) {
     lfunc.luaF_close(L, oldtop);
     seterrorobj(L, status, oldtop);
     L.ci = ci;
+    if (L.cfs) L.cfs.ptr = ci.cfs_ptr;
     L.allowhook = ci.callstatus & lstate.CIST_OAH;  /* restore original 'allowhook' */
     L.nny = 0;  /* should be zero to be yieldable */
     luaD_shrinkstack(L);
@@ -536,8 +649,8 @@ const resume_error = function(L, msg, narg) {
         api_check(L, L.top <= L.ci.top, "stack overflow");
     } else {
         /* remove args from the stack */
-        for (let i=1; i<narg; i++)
-            delete L.stack[--L.top];
+        if (narg > 1)
+            L.top -= (narg - 1);
         lobject.setsvalue2s(L, L.top-1, ts);  /* push error message */
     }
     return LUA_ERRRUN;
@@ -667,6 +780,7 @@ const luaD_pcall = function(L, func, u, old_top, ef) {
         lfunc.luaF_close(L, old_top);
         seterrorobj(L, status, old_top);
         L.ci = old_ci;
+        if (L.cfs) L.cfs.ptr = old_ci.cfs_ptr;
         L.allowhook = old_allowhooks;
         L.nny = old_nny;
         luaD_shrinkstack(L);

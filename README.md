@@ -1,16 +1,28 @@
-[![Build Status](https://github.com/fengari-lua/fengari/actions/workflows/ci.yaml/badge.svg)](https://github.com/fengari-lua/fengari/actions/workflows/ci.yaml?query=event%3Apush)
-[![npm](https://img.shields.io/npm/v/fengari.svg)](https://npmjs.com/package/fengari)
+[![Build Status](https://github.com/1Jamie/shaped-fengari/actions/workflows/ci.yaml/badge.svg)](https://github.com/1Jamie/shaped-fengari/actions/workflows/ci.yaml?query=event%3Apush)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![#fengari on libera.chat](https://img.shields.io/badge/chat-%23fengari-brightgreen)](https://web.libera.chat/?channels=#fengari)
+
+> [!NOTE]
+> **shaped-fengari**: A specialized fork of upstream [Fengari](https://github.com/fengari-lua/fengari) tailored for real-time web gaming and interactive simulation runtimes (such as `shape_engine` and game recompilation environments).
+> 
+> **Why this fork exists:**
+> Real-time web games have distinct execution characteristics: they require strict 16.6ms (60 FPS) frame budgets where GC spikes cause noticeable micro-stutter, and they constantly exchange data between Lua scripts and host JavaScript systems (rendering, input, audio, physics). While WebAssembly runtimes excel at isolated numerical compute, frequently crossing between Wasm linear memory and the JavaScript host introduces marshalling overhead. `shaped-fengari` optimizes pure-JS Lua execution to address these specific needs:
+> 
+> * **Low-Allocation Stack (StackSoA):** Replaces per-register object wrappers with contiguous typed arrays (`Uint8Array` tags, `Float64Array` values). This significantly reduces nursery GC allocations during active gameplay, helping preserve consistent frame pacing.
+> * **Hybrid Table Storage:** Eliminates discrete object wrappers for small tables (`asize <= 8`), cutting small-node allocations by over 60%.
+> * **Streamlined Hot Paths:** Inlines core numeric arithmetic and minimizes call-frame management overhead, accelerating inner game loops and recursive function calls.
+> * **Zero-Copy Host Interoperability:** By executing directly within the JavaScript engine, Lua scripts can interact with host DOM, WebGL, WebAudio, and engine objects natively without serialization or memory-copying bridges.
+> * **Full Lua 5.3 Semantics:** Maintains 100% specification parity with official Lua 5.3 behavior, fully passing the standard test suite.
+>
+> 📊 **Benchmark Results:** For detailed metrics on compute throughput, memory churn, and boundary latency against upstream Fengari and WebAssembly (Wasmoon), see the [Benchmark Report](bench/reports/wasmoon_comparison.md).
 
 <p align="center">
     <img src="https://github.com/fengari-lua/fengari/raw/master/logo.png" alt="Fengari" width="304" height="304">
 </p>
 
 
-# Fengari
+# shaped-fengari
 
-🌙 φεγγάρι - The Lua VM written in JS ES6 for Node and the browser
+🌙 φεγγάρι - The Lua VM written in JS ES6 for Node and the browser, optimized for low GC pauses and zero-copy host interop.
 
 This repository contains the core fengari code (which is a port of the Lua C library) which includes parser, virtual machine and base libraries.
 However it is rare to use this repository directly.

@@ -53,6 +53,9 @@ const TValue    = lobject.TValue;
 const CClosure  = lobject.CClosure;
 
 const api_incr_top = function(L) {
+    if (L.stack && L.stack.syncFromTValue) {
+        L.stack.syncFromTValue(L.top);
+    }
     L.top++;
     api_check(L, L.top <= L.ci.top, "stack overflow");
 };
@@ -97,10 +100,11 @@ const index2addr = function(L, idx) {
         let o = ci.funcOff + idx;
         api_check(L, idx <= ci.top - (ci.funcOff + 1), "unacceptable index");
         if (o >= L.top) return lobject.luaO_nilobject;
-        else return L.stack[o];
+        return (L.stack && L.stack.getTValue) ? L.stack.getTValue(o) : L.stack[o];
     } else if (idx > LUA_REGISTRYINDEX) {
         api_check(L, idx !== 0 && -idx <= L.top, "invalid index");
-        return L.stack[L.top + idx];
+        let o = L.top + idx;
+        return (L.stack && L.stack.getTValue) ? L.stack.getTValue(o) : L.stack[o];
     } else if (idx === LUA_REGISTRYINDEX) {
         return L.l_G.l_registry;
     } else { /* upvalues */
@@ -159,9 +163,13 @@ const lua_xmove = function(from, to, n) {
     api_check(from, to.ci.top - to.top >= n, "stack overflow");
     from.top -= n;
     for (let i = 0; i < n; i++) {
-        to.stack[to.top] = new lobject.TValue();
-        lobject.setobj2s(to, to.top, from.stack[from.top + i]);
-        delete from.stack[from.top + i];
+        let srcIdx = from.top + i;
+        let tv = (from.stack && from.stack.getTValue) ? from.stack.getTValue(srcIdx) : from.stack[srcIdx];
+        lobject.setobj2s(to, to.top, tv);
+        if (from.stack && from.stack.setNil)
+            from.stack.setNil(srcIdx);
+        else
+            delete from.stack[srcIdx];
         to.top++;
     }
 };
@@ -232,7 +240,13 @@ const lua_rotate = function(L, idx, n) {
 
 const lua_copy = function(L, fromidx, toidx) {
     let from = index2addr(L, fromidx);
-    index2addr(L, toidx).setfrom(from);
+    let to = index2addr(L, toidx);
+    to.setfrom(from);
+    if (toidx > LUA_REGISTRYINDEX) {
+        let toSlot = index2addr_(L, toidx);
+        if (toSlot !== null && L.stack && L.stack.syncFromTValue)
+            L.stack.syncFromTValue(toSlot);
+    }
 };
 
 const lua_remove = function(L, idx) {
@@ -254,19 +268,25 @@ const lua_replace = function(L, idx) {
 */
 
 const lua_pushnil = function(L) {
-    L.stack[L.top] = new TValue(LUA_TNIL, null);
+    let slot = L.stack[L.top];
+    if (!slot || slot === lobject.luaO_nilobject) L.stack[L.top] = lobject.luaO_acquire(L, LUA_TNIL, null);
+    else slot.setnilvalue();
     api_incr_top(L);
 };
 
 const lua_pushnumber = function(L, n) {
     fengari_argcheck(typeof n === "number");
-    L.stack[L.top] = new TValue(LUA_TNUMFLT, n);
+    let slot = L.stack[L.top];
+    if (!slot || slot === lobject.luaO_nilobject) L.stack[L.top] = lobject.luaO_acquire(L, LUA_TNUMFLT, n);
+    else slot.setfltvalue(n);
     api_incr_top(L);
 };
 
 const lua_pushinteger = function(L, n) {
     fengari_argcheckinteger(n);
-    L.stack[L.top] = new TValue(LUA_TNUMINT, n);
+    let slot = L.stack[L.top];
+    if (!slot || slot === lobject.luaO_nilobject) L.stack[L.top] = lobject.luaO_acquire(L, LUA_TNUMINT, n);
+    else slot.setivalue(n);
     api_incr_top(L);
 };
 
@@ -288,8 +308,8 @@ const lua_pushlstring = function(L, s, len) {
 
 const lua_pushstring = function (L, s) {
     if (s === undefined || s === null) {
-        L.stack[L.top] = new TValue(LUA_TNIL, null);
-        L.top++;
+        lua_pushnil(L);
+        return null;
     } else {
         let ts = luaS_new(L, from_userstring(s));
         lobject.pushsvalue2s(L, ts);
@@ -312,8 +332,8 @@ const lua_pushfstring = function (L, fmt, ...argp) {
 /* Similar to lua_pushstring, but takes a JS string */
 const lua_pushliteral = function (L, s) {
     if (s === undefined || s === null) {
-        L.stack[L.top] = new TValue(LUA_TNIL, null);
-        L.top++;
+        lua_pushnil(L);
+        return null;
     } else {
         fengari_argcheck(typeof s === "string");
         let ts = luaS_newliteral(L, s);
@@ -328,18 +348,17 @@ const lua_pushliteral = function (L, s) {
 const lua_pushcclosure = function(L, fn, n) {
     fengari_argcheck(typeof fn === "function");
     fengari_argcheckinteger(n);
-    if (n === 0)
-        L.stack[L.top] = new TValue(LUA_TLCF, fn);
-    else {
+    if (n === 0) {
+        let slot = L.stack[L.top];
+        if (!slot || slot === lobject.luaO_nilobject) L.stack[L.top] = lobject.luaO_acquire(L, LUA_TLCF, fn);
+        else slot.setfvalue(fn);
+    } else {
         api_checknelems(L, n);
         api_check(L, n <= lfunc.MAXUPVAL, "upvalue index too large");
         let cl = new CClosure(L, fn, n);
         for (let i=0; i<n; i++)
             cl.upvalue[i].setfrom(L.stack[L.top - n + i]);
-        for (let i=1; i<n; i++)
-            delete L.stack[--L.top];
-        if (n>0)
-            --L.top;
+        L.top -= n;
         L.stack[L.top].setclCvalue(cl);
     }
     api_incr_top(L);
@@ -354,17 +373,23 @@ const lua_pushcfunction = function(L, fn) {
 const lua_pushjsfunction = lua_pushcfunction;
 
 const lua_pushboolean = function(L, b) {
-    L.stack[L.top] = new TValue(LUA_TBOOLEAN, !!b);
+    let slot = L.stack[L.top];
+    if (!slot || slot === lobject.luaO_nilobject) L.stack[L.top] = lobject.luaO_acquire(L, LUA_TBOOLEAN, !!b);
+    else slot.setbvalue(!!b);
     api_incr_top(L);
 };
 
 const lua_pushlightuserdata = function(L, p) {
-    L.stack[L.top] = new TValue(LUA_TLIGHTUSERDATA, p);
+    let slot = L.stack[L.top];
+    if (!slot || slot === lobject.luaO_nilobject) L.stack[L.top] = lobject.luaO_acquire(L, LUA_TLIGHTUSERDATA, p);
+    else slot.setpvalue(p);
     api_incr_top(L);
 };
 
 const lua_pushthread = function(L) {
-    L.stack[L.top] = new TValue(LUA_TTHREAD, L);
+    let slot = L.stack[L.top];
+    if (!slot || slot === lobject.luaO_nilobject) L.stack[L.top] = lobject.luaO_acquire(L, LUA_TTHREAD, L);
+    else slot.setthvalue(L);
     api_incr_top(L);
     return L.l_G.mainthread === L;
 };
@@ -385,25 +410,28 @@ const auxsetstr = function(L, t, k) {
     api_checknelems(L, 1);
     lobject.pushsvalue2s(L, str); /* push 'str' (to make it a TValue) */
     api_check(L, L.top <= L.ci.top, "stack overflow");
-    lvm.settable(L, t, L.stack[L.top - 1], L.stack[L.top - 2]);
+    let key = (L.stack && L.stack.getTValue) ? L.stack.getTValue(L.top - 1) : L.stack[L.top - 1];
+    let val = (L.stack && L.stack.getTValue) ? L.stack.getTValue(L.top - 2) : L.stack[L.top - 2];
+    lvm.settable(L, t, key, val);
     /* pop value and key */
-    delete L.stack[--L.top];
-    delete L.stack[--L.top];
+    L.top -= 2;
 };
 
 const lua_setglobal = function(L, name) {
-    auxsetstr(L, ltable.luaH_getint(L.l_G.l_registry.value, LUA_RIDX_GLOBALS), name);
+    let gt = L.l_G._globalsTV || ltable.luaH_getint(L.l_G.l_registry.value, LUA_RIDX_GLOBALS);
+    auxsetstr(L, gt, name);
 };
 
 const lua_setmetatable = function(L, objindex) {
     api_checknelems(L, 1);
     let mt;
     let obj = index2addr(L, objindex);
-    if (L.stack[L.top - 1].ttisnil())
+    let topVal = (L.stack && L.stack.getTValue) ? L.stack.getTValue(L.top - 1) : L.stack[L.top - 1];
+    if (topVal.ttisnil())
         mt = null;
     else {
-        api_check(L, L.stack[L.top - 1].ttistable(), "table expected");
-        mt = L.stack[L.top - 1].value;
+        api_check(L, topVal.ttistable(), "table expected");
+        mt = topVal.value;
     }
 
     switch (obj.ttnov()) {
@@ -418,16 +446,17 @@ const lua_setmetatable = function(L, objindex) {
         }
     }
 
-    delete L.stack[--L.top];
+    --L.top;
     return true;
 };
 
 const lua_settable = function(L, idx) {
     api_checknelems(L, 2);
     let t = index2addr(L, idx);
-    lvm.settable(L, t, L.stack[L.top - 2], L.stack[L.top - 1]);
-    delete L.stack[--L.top];
-    delete L.stack[--L.top];
+    let key = (L.stack && L.stack.getTValue) ? L.stack.getTValue(L.top - 2) : L.stack[L.top - 2];
+    let val = (L.stack && L.stack.getTValue) ? L.stack.getTValue(L.top - 1) : L.stack[L.top - 1];
+    lvm.settable(L, t, key, val);
+    L.top -= 2;
 };
 
 const lua_setfield = function(L, idx, k) {
@@ -440,22 +469,22 @@ const lua_seti = function(L, idx, n) {
     let t = index2addr(L, idx);
     L.stack[L.top] = new TValue(LUA_TNUMINT, n);
     api_incr_top(L);
-    lvm.settable(L, t, L.stack[L.top - 1], L.stack[L.top - 2]);
+    let key = (L.stack && L.stack.getTValue) ? L.stack.getTValue(L.top - 1) : L.stack[L.top - 1];
+    let val = (L.stack && L.stack.getTValue) ? L.stack.getTValue(L.top - 2) : L.stack[L.top - 2];
+    lvm.settable(L, t, key, val);
     /* pop value and key */
-    delete L.stack[--L.top];
-    delete L.stack[--L.top];
+    L.top -= 2;
 };
 
 const lua_rawset = function(L, idx) {
     api_checknelems(L, 2);
     let o = index2addr(L, idx);
     api_check(L, o.ttistable(), "table expected");
-    let k = L.stack[L.top - 2];
-    let v = L.stack[L.top - 1];
+    let k = (L.stack && L.stack.getTValue) ? L.stack.getTValue(L.top - 2) : L.stack[L.top - 2];
+    let v = (L.stack && L.stack.getTValue) ? L.stack.getTValue(L.top - 1) : L.stack[L.top - 1];
     ltable.luaH_setfrom(L, o.value, k, v);
     ltable.invalidateTMcache(o.value);
-    delete L.stack[--L.top];
-    delete L.stack[--L.top];
+    L.top -= 2;
 };
 
 const lua_rawseti = function(L, idx, n) {
@@ -463,8 +492,9 @@ const lua_rawseti = function(L, idx, n) {
     api_checknelems(L, 1);
     let o = index2addr(L, idx);
     api_check(L, o.ttistable(), "table expected");
-    ltable.luaH_setint(o.value, n, L.stack[L.top - 1]);
-    delete L.stack[--L.top];
+    let v = (L.stack && L.stack.getTValue) ? L.stack.getTValue(L.top - 1) : L.stack[L.top - 1];
+    ltable.luaH_setint(o.value, n, v);
+    --L.top;
 };
 
 const lua_rawsetp = function(L, idx, p) {
@@ -472,9 +502,9 @@ const lua_rawsetp = function(L, idx, p) {
     let o = index2addr(L, idx);
     api_check(L, o.ttistable(), "table expected");
     let k = new TValue(LUA_TLIGHTUSERDATA, p);
-    let v = L.stack[L.top - 1];
+    let v = (L.stack && L.stack.getTValue) ? L.stack.getTValue(L.top - 1) : L.stack[L.top - 1];
     ltable.luaH_setfrom(L, o.value, k, v);
-    delete L.stack[--L.top];
+    --L.top;
 };
 
 /*
@@ -577,7 +607,7 @@ const lua_setupvalue = function(L, funcindex, n) {
         let name = aux.name;
         let val = aux.val;
         val.setfrom(L.stack[L.top-1]);
-        delete L.stack[--L.top];
+        --L.top;
         return name;
     }
     return null;
@@ -626,7 +656,10 @@ const lua_getuservalue = function(L, idx) {
 
 const lua_gettable = function(L, idx) {
     let t = index2addr(L, idx);
-    lvm.luaV_gettable(L, t, L.stack[L.top - 1], L.top - 1);
+    let key = (L.stack && L.stack.getTValue) ? L.stack.getTValue(L.top - 1) : L.stack[L.top - 1];
+    lvm.luaV_gettable(L, t, key, L.top - 1);
+    if (L.stack && L.stack.syncFromTValue)
+        L.stack.syncFromTValue(L.top - 1);
     return L.stack[L.top - 1].ttnov();
 };
 
@@ -644,7 +677,8 @@ const lua_geti = function(L, idx, n) {
 };
 
 const lua_getglobal = function(L, name) {
-    return auxgetstr(L, ltable.luaH_getint(L.l_G.l_registry.value, LUA_RIDX_GLOBALS), name);
+    let gt = L.l_G._globalsTV || ltable.luaH_getint(L.l_G.l_registry.value, LUA_RIDX_GLOBALS);
+    return auxgetstr(L, gt, name);
 };
 
 /*
@@ -671,6 +705,23 @@ const lua_tolstring = function(L, idx) {
 const lua_tostring =  lua_tolstring;
 
 const lua_tojsstring = function(L, idx) {
+    if (L.stack && L.stack.tags) {
+        let o = -1;
+        if (idx > 0) {
+            let candidate = L.ci.funcOff + idx;
+            if (candidate < L.top) o = candidate;
+        } else if (idx > LUA_REGISTRYINDEX) {
+            let candidate = L.top + idx;
+            if (candidate >= 0 && candidate < L.top) o = candidate;
+        }
+        if (o >= 0) {
+            let tag = L.stack.tags[o];
+            if (tag === LUA_TSHRSTR || tag === LUA_TLNGSTR) {
+                let s = L.stack.refs[o];
+                if (s && s.tojsstring) return s.tojsstring();
+            }
+        }
+    }
     let o = index2addr(L, idx);
 
     if (!o.ttisstring()) {
@@ -903,7 +954,9 @@ const lua_arith = function(L, op) {
     }
     /* first operand at top - 2, second at top - 1; result go to top - 2 */
     lobject.luaO_arith(L, op, L.stack[L.top - 2], L.stack[L.top - 1], L.stack[L.top - 2]);
-    delete L.stack[--L.top];  /* remove second operand */
+    --L.top;  /* remove second operand */
+    if (L.stack && L.stack.syncFromTValue)
+        L.stack.syncFromTValue(L.top - 1);
 };
 
 /*
@@ -921,7 +974,7 @@ const lua_load = function(L, reader, data, chunkname, mode) {
         let f = L.stack[L.top - 1].value; /* get newly created function */
         if (f.nupvalues >= 1) {  /* does it have an upvalue? */
             /* get global table from registry */
-            let gt = ltable.luaH_getint(L.l_G.l_registry.value, LUA_RIDX_GLOBALS);
+            let gt = L.l_G._globalsTV || ltable.luaH_getint(L.l_G.l_registry.value, LUA_RIDX_GLOBALS);
             /* set global table as 1st upvalue of 'f' (may be LUA_ENV) */
             f.upvals[0].setfrom(gt);
         }
@@ -946,7 +999,7 @@ const lua_setuservalue = function(L, idx) {
     let o = index2addr(L, idx);
     api_check(L, o.ttisfulluserdata(), "full userdata expected");
     o.value.uservalue.setfrom(L.stack[L.top - 1]);
-    delete L.stack[--L.top];
+    --L.top;
 };
 
 const checkresults = function(L,na,nr) {
@@ -1039,8 +1092,7 @@ const lua_next = function(L, idx) {
         api_incr_top(L);
         return 1;
     } else {
-        delete L.stack[L.top];
-        delete L.stack[--L.top];
+        --L.top;
         return 0;
     }
 };

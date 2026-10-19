@@ -1,37 +1,44 @@
 {
-  "name": "fengari",
+  "name": "shaped-fengari",
   "version": "0.1.5",
-  "description": "A Lua VM written in JS ES6 targeting the browser",
+  "description": "A high-performance, low-GC Lua 5.3 VM in JS ES6 for real-time web applications and games",
   "main": "src/fengari.js",
   "directories": {
     "lib": "src",
     "test": "test"
   },
   "scripts": {
+    "bench": "node --expose-gc bench/run.js",
     "lint": "eslint src/ test/",
     "prepublishOnly": "git diff-index --quiet --cached HEAD -- && npm run lint && npm run test",
     "test": "jest"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/fengari-lua/fengari.git"
+    "url": "git+https://github.com/1Jamie/shaped-fengari.git"
   },
   "keywords": [
     "lua",
-    "vm"
+    "vm",
+    "game-engine",
+    "real-time",
+    "low-gc"
   ],
   "contributors": [
+    "Jamie <https://github.com/1Jamie>",
     "Benoit Giannangeli",
     "Daurnimator <quae@daurnimator.com>"
   ],
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/fengari-lua/fengari/issues"
+    "url": "https://github.com/1Jamie/shaped-fengari/issues"
   },
-  "homepage": "https://github.com/fengari-lua/fengari#readme",
+  "homepage": "https://github.com/1Jamie/shaped-fengari#readme",
   "devDependencies": {
+    "base-fengari": "npm:fengari@^0.1.5",
     "eslint": "^9.39.2",
-    "jest": "^30.2.0"
+    "jest": "^30.2.0",
+    "wasmoon": "^1.16.0"
   },
   "dependencies": {
     "readline-sync": "^1.4.10",

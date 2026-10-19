@@ -111,12 +111,12 @@ const luaV_finishOp = function(L) {
         case OP_UNM: case OP_BNOT: case OP_LEN:
         case OP_GETTABUP: case OP_GETTABLE: case OP_SELF: {
             lobject.setobjs2s(L, base + inst.A, L.top-1);
-            delete L.stack[--L.top];
+            --L.top;
             break;
         }
         case OP_LE: case OP_LT: case OP_EQ: {
             let res = !L.stack[L.top - 1].l_isfalse();
-            delete L.stack[--L.top];
+            --L.top;
             if (ci.callstatus & lstate.CIST_LEQ) {  /* "<=" using "<" instead? */
                 lua_assert(op === OP_LE);
                 ci.callstatus ^= lstate.CIST_LEQ;  /* clear mark */
@@ -166,12 +166,12 @@ const RB = function(L, base, i) {
 //     return base + i.C;
 // };
 
-const RKB = function(L, base, k, i) {
-    return ISK(i.B) ? k[INDEXK(i.B)] : L.stack[base + i.B];
-};
+// const RKB = function(L, base, k, i) {
+//     return ISK(i.B) ? k[INDEXK(i.B)] : (L.stack.getTValue ? L.stack.getTValue(base + i.B) : L.stack[base + i.B]);
+// };
 
 const RKC = function(L, base, k, i) {
-    return ISK(i.C) ? k[INDEXK(i.C)] : L.stack[base + i.C];
+    return ISK(i.C) ? k[INDEXK(i.C)] : (L.stack.getTValue ? L.stack.getTValue(base + i.C) : L.stack[base + i.C]);
 };
 
 const luaV_execute = function(L) {
@@ -180,10 +180,28 @@ const luaV_execute = function(L) {
     ci.callstatus |= lstate.CIST_FRESH;
     newframe:
     for (;;) {
-        lua_assert(ci === L.ci);
         let cl = ci.func.value;
         let k = cl.p.k;
+        let kTags = cl.p.kTags;
+        let kVals = cl.p.kVals;
+        if (!kTags) {
+            const kLen = k.length;
+            kTags = cl.p.kTags = new Uint8Array(kLen);
+            kVals = cl.p.kVals = new Float64Array(kLen);
+            for (let ki = 0; ki < kLen; ki++) {
+                const item = k[ki];
+                kTags[ki] = item.type;
+                if (typeof item.value === "number") {
+                    kVals[ki] = item.value;
+                } else if (typeof item.value === "boolean") {
+                    kVals[ki] = item.value ? 1 : 0;
+                } else {
+                    kVals[ki] = 0;
+                }
+            }
+        }
         let base = ci.l_base;
+        let stack = L.stack;
 
         let i = ci.l_code[ci.l_savedpc++];
 
@@ -191,77 +209,173 @@ const luaV_execute = function(L) {
             ldebug.luaG_traceexec(L);
         }
 
-        let ra = RA(L, base, i);
+        let ra = base + i.A;
         let opcode = i.opcode;
 
         switch (opcode) {
             case OP_MOVE: {
-                lobject.setobjs2s(L, ra, RB(L, base, i));
+                stack.copy(ra, base + i.B);
                 break;
             }
             case OP_LOADK: {
-                let konst = k[i.Bx];
-                lobject.setobj2s(L, ra, konst);
+                let bx = i.Bx;
+                let tag = kTags[bx];
+                if (tag === LUA_TNUMINT) {
+                    stack.setInteger(ra, kVals[bx] | 0);
+                } else if (tag === LUA_TNUMFLT) {
+                    stack.setNumber(ra, kVals[bx]);
+                } else {
+                    let konst = k[bx];
+                    stack.setObject(ra, konst.type, konst.value);
+                }
                 break;
             }
             case OP_LOADKX: {
                 lua_assert(ci.l_code[ci.l_savedpc].opcode === OP_EXTRAARG);
-                let konst = k[ci.l_code[ci.l_savedpc++].Ax];
-                lobject.setobj2s(L, ra, konst);
+                let ax = ci.l_code[ci.l_savedpc++].Ax;
+                let tag = kTags[ax];
+                if (tag === LUA_TNUMINT) {
+                    stack.setInteger(ra, kVals[ax] | 0);
+                } else if (tag === LUA_TNUMFLT) {
+                    stack.setNumber(ra, kVals[ax]);
+                } else {
+                    let konst = k[ax];
+                    stack.setObject(ra, konst.type, konst.value);
+                }
                 break;
             }
             case OP_LOADBOOL: {
-                L.stack[ra].setbvalue(i.B !== 0);
-
+                stack.setBoolean(ra, i.B !== 0);
                 if (i.C !== 0)
                     ci.l_savedpc++; /* skip next instruction (if C) */
 
                 break;
             }
             case OP_LOADNIL: {
-                for (let j = 0; j <= i.B; j++)
-                    L.stack[ra + j].setnilvalue();
+                for (let j = 0; j <= i.B; j++) {
+                    stack.setNil(ra + j);
+                }
                 break;
             }
             case OP_GETUPVAL: {
-                let b = i.B;
-                lobject.setobj2s(L, ra, cl.upvals[b]);
+                let uv = cl.upvals[i.B];
+                let uvType = uv.type;
+                if (uvType === LUA_TNUMINT) {
+                    stack.setInteger(ra, uv.value | 0);
+                } else if (uvType === LUA_TNUMFLT) {
+                    stack.setNumber(ra, uv.value);
+                } else if (uvType === LUA_TBOOLEAN) {
+                    stack.setBoolean(ra, uv.value);
+                } else if (uvType === LUA_TNIL) {
+                    stack.setNil(ra);
+                } else {
+                    stack.setObject(ra, uvType, uv.value);
+                }
                 break;
             }
             case OP_GETTABUP: {
                 let upval = cl.upvals[i.B];
-                let rc = RKC(L, base, k, i);
+                let c = i.C;
+                let rc = (c & 0x100) ? k[c & 0xFF] : stack.getTValue(base + c);
                 luaV_gettable(L, upval, rc, ra);
+                stack.syncFromTValue(ra);
                 break;
             }
             case OP_GETTABLE: {
-                let rb = L.stack[RB(L, base, i)];
-                let rc = RKC(L, base, k, i);
+                let rbSlot = base + i.B;
+                let rbTag = stack.tags[rbSlot];
+                let c = i.C;
+                let isKC = (c & 0x100) !== 0;
+                let slotC = isKC ? (c & 0xFF) : (base + c);
+                let tagC = isKC ? kTags[slotC] : stack.tags[slotC];
+                let valC = isKC ? kVals[slotC] : stack.valsF64[slotC];
+
+                let isInt = false;
+                let keyInt = 0;
+                if (tagC === LUA_TNUMINT) {
+                    isInt = true;
+                    keyInt = valC | 0;
+                } else if (tagC === LUA_TNUMFLT && (valC | 0) === valC) {
+                    isInt = true;
+                    keyInt = valC | 0;
+                }
+
+                if (isInt && rbTag === LUA_TTABLE) {
+                    let tableObj = stack.refs[rbSlot];
+                    let found = ltable.luaH_getint_to_stack(tableObj, keyInt, stack, ra);
+                    if (found) break;
+                    if (tableObj.metatable === null || ltm.fasttm(L, tableObj.metatable, ltm.TMS.TM_INDEX) === null) {
+                        stack.setNil(ra);
+                        break;
+                    }
+                }
+
+                let rb = stack.getTValue(rbSlot);
+                let rc = isKC ? k[slotC] : stack.getTValue(slotC);
                 luaV_gettable(L, rb, rc, ra);
+                stack.syncFromTValue(ra);
                 break;
             }
             case OP_SETTABUP: {
                 let upval = cl.upvals[i.A];
-                let rb = RKB(L, base, k, i);
-                let rc = RKC(L, base, k, i);
+                let b = i.B;
+                let rb = (b & 0x100) ? k[b & 0xFF] : stack.getTValue(base + b);
+                let c = i.C;
+                let rc = (c & 0x100) ? k[c & 0xFF] : stack.getTValue(base + c);
                 settable(L, upval, rb, rc);
                 break;
             }
             case OP_SETUPVAL: {
                 let uv = cl.upvals[i.B];
-                uv.setfrom(L.stack[ra]);
+                let src = stack.getTValue(ra);
+                uv.type = src.type;
+                uv.value = src.value;
+                if (uv.ownerStack) {
+                    uv.ownerStack.syncFromTValue(uv.ownerSlot);
+                }
                 break;
             }
             case OP_SETTABLE: {
-                let table = L.stack[ra];
-                let key = RKB(L, base, k, i);
-                let v = RKC(L, base, k, i);
+                let tableTag = stack.tags[ra];
+                let b = i.B;
+                let isKB = (b & 0x100) !== 0;
+                let slotB = isKB ? (b & 0xFF) : (base + b);
+                let tagB = isKB ? kTags[slotB] : stack.tags[slotB];
+                let valB = isKB ? kVals[slotB] : stack.valsF64[slotB];
+
+                let isInt = false;
+                let keyInt = 0;
+                if (tagB === LUA_TNUMINT) {
+                    isInt = true;
+                    keyInt = valB | 0;
+                } else if (tagB === LUA_TNUMFLT && (valB | 0) === valB) {
+                    isInt = true;
+                    keyInt = valB | 0;
+                }
+
+                let c = i.C;
+                let isKC = (c & 0x100) !== 0;
+                let slotC = isKC ? (c & 0xFF) : (base + c);
+
+                if (isInt && tableTag === LUA_TTABLE) {
+                    let tableObj = stack.refs[ra];
+                    if (tableObj.metatable === null || !ltable.luaH_getint_isnil(tableObj, keyInt) || ltm.fasttm(L, tableObj.metatable, ltm.TMS.TM_NEWINDEX) === null) {
+                        ltable.luaH_setint_from_stack(L, tableObj, keyInt, stack, slotC, isKC, k, kTags, kVals);
+                        ltable.invalidateTMcache(tableObj);
+                        break;
+                    }
+                }
+
+                let table = stack.getTValue(ra);
+                let key = isKB ? k[slotB] : stack.getTValue(slotB);
+                let v = isKC ? k[slotC] : stack.getTValue(slotC);
 
                 settable(L, table, key, v);
                 break;
             }
             case OP_NEWTABLE: {
-                L.stack[ra].sethvalue(ltable.luaH_new(L));
+                const asize = lobject.luaO_fb2int(i.B);
+                stack.setObject(ra, LUA_TTABLE, ltable.luaH_new(L, asize));
                 break;
             }
             case OP_SELF: {
@@ -269,243 +383,688 @@ const luaV_execute = function(L) {
                 let rc = RKC(L, base, k, i);
                 lobject.setobjs2s(L, ra + 1, rb);
                 luaV_gettable(L, L.stack[rb], rc, ra);
+                stack.syncFromTValue(ra);
                 break;
             }
             case OP_ADD: {
-                let op1 = RKB(L, base, k, i);
-                let op2 = RKC(L, base, k, i);
-                let numberop1, numberop2;
+                const b = i.B;
+                const isKB = (b & 0x100) !== 0;
+                const slotB = isKB ? (b & 0xFF) : (base + b);
+                const tagB  = isKB ? kTags[slotB] : stack.tags[slotB];
+                const valB  = isKB ? kVals[slotB] : stack.valsF64[slotB];
 
-                if (op1.ttisinteger() && op2.ttisinteger()) {
-                    L.stack[ra].setivalue((op1.value + op2.value)|0);
-                } else if ((numberop1 = tonumber(op1)) !== false && (numberop2 = tonumber(op2)) !== false) {
-                    L.stack[ra].setfltvalue(numberop1 + numberop2);
+                const c = i.C;
+                const isKC = (c & 0x100) !== 0;
+                const slotC = isKC ? (c & 0xFF) : (base + c);
+                const tagC  = isKC ? kTags[slotC] : stack.tags[slotC];
+                const valC  = isKC ? kVals[slotC] : stack.valsF64[slotC];
+
+                if (tagB === LUA_TNUMINT && tagC === LUA_TNUMINT) {
+                    const res = (valB + valC) | 0;
+                    stack.tags[ra] = LUA_TNUMINT;
+                    stack.valsF64[ra] = res;
+                    stack.refs[ra] = null;
+                } else if ((tagB === LUA_TNUMFLT || tagB === LUA_TNUMINT) &&
+                           (tagC === LUA_TNUMFLT || tagC === LUA_TNUMINT)) {
+                    const res = valB + valC;
+                    stack.tags[ra] = LUA_TNUMFLT;
+                    stack.valsF64[ra] = res;
+                    stack.refs[ra] = null;
                 } else {
-                    ltm.luaT_trybinTM(L, op1, op2, L.stack[ra], ltm.TMS.TM_ADD);
+                    let op1 = isKB ? k[slotB] : stack.getTValue(slotB);
+                    let op2 = isKC ? k[slotC] : stack.getTValue(slotC);
+                    let n1, n2;
+                    if ((n1 = tonumber(op1)) !== false && (n2 = tonumber(op2)) !== false) {
+                        const res = n1 + n2;
+                        stack.tags[ra] = LUA_TNUMFLT;
+                        stack.valsF64[ra] = res;
+                        stack.refs[ra] = null;
+                    } else {
+                        ltm.luaT_trybinTM(L, op1, op2, stack.getTValue(ra), ltm.TMS.TM_ADD);
+                        stack.syncFromTValue(ra);
+                    }
                 }
                 break;
             }
             case OP_SUB: {
-                let op1 = RKB(L, base, k, i);
-                let op2 = RKC(L, base, k, i);
-                let numberop1, numberop2;
+                const b = i.B;
+                const isKB = (b & 0x100) !== 0;
+                const slotB = isKB ? (b & 0xFF) : (base + b);
+                const tagB  = isKB ? kTags[slotB] : stack.tags[slotB];
+                const valB  = isKB ? kVals[slotB] : stack.valsF64[slotB];
 
-                if (op1.ttisinteger() && op2.ttisinteger()) {
-                    L.stack[ra].setivalue((op1.value - op2.value)|0);
-                } else if ((numberop1 = tonumber(op1)) !== false && (numberop2 = tonumber(op2)) !== false) {
-                    L.stack[ra].setfltvalue(numberop1 - numberop2);
+                const c = i.C;
+                const isKC = (c & 0x100) !== 0;
+                const slotC = isKC ? (c & 0xFF) : (base + c);
+                const tagC  = isKC ? kTags[slotC] : stack.tags[slotC];
+                const valC  = isKC ? kVals[slotC] : stack.valsF64[slotC];
+
+                if (tagB === LUA_TNUMINT && tagC === LUA_TNUMINT) {
+                    const res = (valB - valC) | 0;
+                    stack.tags[ra] = LUA_TNUMINT;
+                    stack.valsF64[ra] = res;
+                    stack.refs[ra] = null;
+                } else if ((tagB === LUA_TNUMFLT || tagB === LUA_TNUMINT) &&
+                           (tagC === LUA_TNUMFLT || tagC === LUA_TNUMINT)) {
+                    const res = valB - valC;
+                    stack.tags[ra] = LUA_TNUMFLT;
+                    stack.valsF64[ra] = res;
+                    stack.refs[ra] = null;
                 } else {
-                    ltm.luaT_trybinTM(L, op1, op2, L.stack[ra], ltm.TMS.TM_SUB);
+                    let op1 = isKB ? k[slotB] : stack.getTValue(slotB);
+                    let op2 = isKC ? k[slotC] : stack.getTValue(slotC);
+                    let n1, n2;
+                    if ((n1 = tonumber(op1)) !== false && (n2 = tonumber(op2)) !== false) {
+                        const res = n1 - n2;
+                        stack.tags[ra] = LUA_TNUMFLT;
+                        stack.valsF64[ra] = res;
+                        stack.refs[ra] = null;
+                    } else {
+                        ltm.luaT_trybinTM(L, op1, op2, stack.getTValue(ra), ltm.TMS.TM_SUB);
+                        stack.syncFromTValue(ra);
+                    }
                 }
                 break;
             }
             case OP_MUL: {
-                let op1 = RKB(L, base, k, i);
-                let op2 = RKC(L, base, k, i);
-                let numberop1, numberop2;
+                const b = i.B;
+                const isKB = (b & 0x100) !== 0;
+                const slotB = isKB ? (b & 0xFF) : (base + b);
+                const tagB  = isKB ? kTags[slotB] : stack.tags[slotB];
+                const valB  = isKB ? kVals[slotB] : stack.valsF64[slotB];
 
-                if (op1.ttisinteger() && op2.ttisinteger()) {
-                    L.stack[ra].setivalue(luaV_imul(op1.value, op2.value));
-                } else if ((numberop1 = tonumber(op1)) !== false && (numberop2 = tonumber(op2)) !== false) {
-                    L.stack[ra].setfltvalue(numberop1 * numberop2);
+                const c = i.C;
+                const isKC = (c & 0x100) !== 0;
+                const slotC = isKC ? (c & 0xFF) : (base + c);
+                const tagC  = isKC ? kTags[slotC] : stack.tags[slotC];
+                const valC  = isKC ? kVals[slotC] : stack.valsF64[slotC];
+
+                if (tagB === LUA_TNUMINT && tagC === LUA_TNUMINT) {
+                    const res = Math.imul(valB, valC);
+                    stack.tags[ra] = LUA_TNUMINT;
+                    stack.valsF64[ra] = res;
+                    stack.refs[ra] = null;
+                } else if ((tagB === LUA_TNUMFLT || tagB === LUA_TNUMINT) &&
+                           (tagC === LUA_TNUMFLT || tagC === LUA_TNUMINT)) {
+                    const res = valB * valC;
+                    stack.tags[ra] = LUA_TNUMFLT;
+                    stack.valsF64[ra] = res;
+                    stack.refs[ra] = null;
                 } else {
-                    ltm.luaT_trybinTM(L, op1, op2, L.stack[ra], ltm.TMS.TM_MUL);
+                    let op1 = isKB ? k[slotB] : stack.getTValue(slotB);
+                    let op2 = isKC ? k[slotC] : stack.getTValue(slotC);
+                    let n1, n2;
+                    if ((n1 = tonumber(op1)) !== false && (n2 = tonumber(op2)) !== false) {
+                        const res = n1 * n2;
+                        stack.tags[ra] = LUA_TNUMFLT;
+                        stack.valsF64[ra] = res;
+                        stack.refs[ra] = null;
+                    } else {
+                        ltm.luaT_trybinTM(L, op1, op2, stack.getTValue(ra), ltm.TMS.TM_MUL);
+                        stack.syncFromTValue(ra);
+                    }
                 }
                 break;
             }
             case OP_MOD: {
-                let op1 = RKB(L, base, k, i);
-                let op2 = RKC(L, base, k, i);
-                let numberop1, numberop2;
+                const b = i.B;
+                const isKB = (b & 0x100) !== 0;
+                const slotB = isKB ? (b & 0xFF) : (base + b);
+                const tagB  = isKB ? kTags[slotB] : stack.tags[slotB];
+                const valB  = isKB ? kVals[slotB] : stack.valsF64[slotB];
 
-                if (op1.ttisinteger() && op2.ttisinteger()) {
-                    L.stack[ra].setivalue(luaV_mod(L, op1.value, op2.value));
-                } else if ((numberop1 = tonumber(op1)) !== false && (numberop2 = tonumber(op2)) !== false) {
-                    L.stack[ra].setfltvalue(luai_nummod(L, numberop1, numberop2));
+                const c = i.C;
+                const isKC = (c & 0x100) !== 0;
+                const slotC = isKC ? (c & 0xFF) : (base + c);
+                const tagC  = isKC ? kTags[slotC] : stack.tags[slotC];
+                const valC  = isKC ? kVals[slotC] : stack.valsF64[slotC];
+
+                if (tagB === LUA_TNUMINT && tagC === LUA_TNUMINT) {
+                    if (valC === 0) ldebug.luaG_runerror(L, to_luastring("attempt to perform 'n%%0'"));
+                    let res;
+                    if (valB >= -2147483647 && valB <= 2147483647 && valC >= -2147483647 && valC <= 2147483647) {
+                        const m = valB | 0;
+                        const n = valC | 0;
+                        res = (m % n) | 0;
+                        if (res !== 0 && ((res ^ n) < 0)) res = (res + n) | 0;
+                    } else {
+                        res = valB - Math.floor(valB / valC) * valC;
+                    }
+                    stack.tags[ra] = LUA_TNUMINT;
+                    stack.valsF64[ra] = res;
+                    stack.refs[ra] = null;
+                } else if ((tagB === LUA_TNUMFLT || tagB === LUA_TNUMINT) &&
+                           (tagC === LUA_TNUMFLT || tagC === LUA_TNUMINT)) {
+                    const res = luai_nummod(L, valB, valC);
+                    stack.tags[ra] = LUA_TNUMFLT;
+                    stack.valsF64[ra] = res;
+                    stack.refs[ra] = null;
                 } else {
-                    ltm.luaT_trybinTM(L, op1, op2, L.stack[ra], ltm.TMS.TM_MOD);
+                    let op1 = isKB ? k[slotB] : stack.getTValue(slotB);
+                    let op2 = isKC ? k[slotC] : stack.getTValue(slotC);
+                    let n1, n2;
+                    if ((n1 = tonumber(op1)) !== false && (n2 = tonumber(op2)) !== false) {
+                        const res = luai_nummod(L, n1, n2);
+                        stack.tags[ra] = LUA_TNUMFLT;
+                        stack.valsF64[ra] = res;
+                        stack.refs[ra] = null;
+                    } else {
+                        ltm.luaT_trybinTM(L, op1, op2, stack.getTValue(ra), ltm.TMS.TM_MOD);
+                        stack.syncFromTValue(ra);
+                    }
                 }
                 break;
             }
             case OP_POW: {
-                let op1 = RKB(L, base, k, i);
-                let op2 = RKC(L, base, k, i);
-                let numberop1, numberop2;
+                const b = i.B;
+                const isKB = (b & 0x100) !== 0;
+                const slotB = isKB ? (b & 0xFF) : (base + b);
+                const tagB  = isKB ? kTags[slotB] : stack.tags[slotB];
+                const valB  = isKB ? kVals[slotB] : stack.valsF64[slotB];
 
-                if ((numberop1 = tonumber(op1)) !== false && (numberop2 = tonumber(op2)) !== false) {
-                    L.stack[ra].setfltvalue(Math.pow(numberop1, numberop2));
+                const c = i.C;
+                const isKC = (c & 0x100) !== 0;
+                const slotC = isKC ? (c & 0xFF) : (base + c);
+                const tagC  = isKC ? kTags[slotC] : stack.tags[slotC];
+                const valC  = isKC ? kVals[slotC] : stack.valsF64[slotC];
+
+                if ((tagB === LUA_TNUMFLT || tagB === LUA_TNUMINT) &&
+                    (tagC === LUA_TNUMFLT || tagC === LUA_TNUMINT)) {
+                    const res = Math.pow(valB, valC);
+                    stack.tags[ra] = LUA_TNUMFLT;
+                    stack.valsF64[ra] = res;
+                    stack.refs[ra] = null;
                 } else {
-                    ltm.luaT_trybinTM(L, op1, op2, L.stack[ra], ltm.TMS.TM_POW);
+                    let op1 = isKB ? k[slotB] : stack.getTValue(slotB);
+                    let op2 = isKC ? k[slotC] : stack.getTValue(slotC);
+                    let n1, n2;
+                    if ((n1 = tonumber(op1)) !== false && (n2 = tonumber(op2)) !== false) {
+                        const res = Math.pow(n1, n2);
+                        stack.tags[ra] = LUA_TNUMFLT;
+                        stack.valsF64[ra] = res;
+                        stack.refs[ra] = null;
+                    } else {
+                        ltm.luaT_trybinTM(L, op1, op2, stack.getTValue(ra), ltm.TMS.TM_POW);
+                        stack.syncFromTValue(ra);
+                    }
                 }
                 break;
             }
             case OP_DIV: {
-                let op1 = RKB(L, base, k, i);
-                let op2 = RKC(L, base, k, i);
-                let numberop1, numberop2;
+                const b = i.B;
+                const isKB = (b & 0x100) !== 0;
+                const slotB = isKB ? (b & 0xFF) : (base + b);
+                const tagB  = isKB ? kTags[slotB] : stack.tags[slotB];
+                const valB  = isKB ? kVals[slotB] : stack.valsF64[slotB];
 
-                if ((numberop1 = tonumber(op1)) !== false && (numberop2 = tonumber(op2)) !== false) {
-                    L.stack[ra].setfltvalue(numberop1 / numberop2);
+                const c = i.C;
+                const isKC = (c & 0x100) !== 0;
+                const slotC = isKC ? (c & 0xFF) : (base + c);
+                const tagC  = isKC ? kTags[slotC] : stack.tags[slotC];
+                const valC  = isKC ? kVals[slotC] : stack.valsF64[slotC];
+
+                if ((tagB === LUA_TNUMFLT || tagB === LUA_TNUMINT) &&
+                    (tagC === LUA_TNUMFLT || tagC === LUA_TNUMINT)) {
+                    const res = valB / valC;
+                    stack.tags[ra] = LUA_TNUMFLT;
+                    stack.valsF64[ra] = res;
+                    stack.refs[ra] = null;
                 } else {
-                    ltm.luaT_trybinTM(L, op1, op2, L.stack[ra], ltm.TMS.TM_DIV);
+                    let op1 = isKB ? k[slotB] : stack.getTValue(slotB);
+                    let op2 = isKC ? k[slotC] : stack.getTValue(slotC);
+                    let n1, n2;
+                    if ((n1 = tonumber(op1)) !== false && (n2 = tonumber(op2)) !== false) {
+                        const res = n1 / n2;
+                        stack.tags[ra] = LUA_TNUMFLT;
+                        stack.valsF64[ra] = res;
+                        stack.refs[ra] = null;
+                    } else {
+                        ltm.luaT_trybinTM(L, op1, op2, stack.getTValue(ra), ltm.TMS.TM_DIV);
+                        stack.syncFromTValue(ra);
+                    }
                 }
                 break;
             }
             case OP_IDIV: {
-                let op1 = RKB(L, base, k, i);
-                let op2 = RKC(L, base, k, i);
-                let numberop1, numberop2;
+                const b = i.B;
+                const isKB = (b & 0x100) !== 0;
+                const slotB = isKB ? (b & 0xFF) : (base + b);
+                const tagB  = isKB ? kTags[slotB] : stack.tags[slotB];
+                const valB  = isKB ? kVals[slotB] : stack.valsF64[slotB];
 
-                if (op1.ttisinteger() && op2.ttisinteger()) {
-                    L.stack[ra].setivalue(luaV_div(L, op1.value, op2.value));
-                } else if ((numberop1 = tonumber(op1)) !== false && (numberop2 = tonumber(op2)) !== false) {
-                    L.stack[ra].setfltvalue(Math.floor(numberop1 / numberop2));
+                const c = i.C;
+                const isKC = (c & 0x100) !== 0;
+                const slotC = isKC ? (c & 0xFF) : (base + c);
+                const tagC  = isKC ? kTags[slotC] : stack.tags[slotC];
+                const valC  = isKC ? kVals[slotC] : stack.valsF64[slotC];
+
+                if (tagB === LUA_TNUMINT && tagC === LUA_TNUMINT) {
+                    const res = luaV_div(L, valB, valC);
+                    stack.tags[ra] = LUA_TNUMINT;
+                    stack.valsF64[ra] = res;
+                    stack.refs[ra] = null;
+                } else if ((tagB === LUA_TNUMFLT || tagB === LUA_TNUMINT) &&
+                           (tagC === LUA_TNUMFLT || tagC === LUA_TNUMINT)) {
+                    const res = Math.floor(valB / valC);
+                    stack.tags[ra] = LUA_TNUMFLT;
+                    stack.valsF64[ra] = res;
+                    stack.refs[ra] = null;
                 } else {
-                    ltm.luaT_trybinTM(L, op1, op2, L.stack[ra], ltm.TMS.TM_IDIV);
+                    let op1 = isKB ? k[slotB] : stack.getTValue(slotB);
+                    let op2 = isKC ? k[slotC] : stack.getTValue(slotC);
+                    let n1, n2;
+                    if ((n1 = tonumber(op1)) !== false && (n2 = tonumber(op2)) !== false) {
+                        const res = Math.floor(n1 / n2);
+                        stack.tags[ra] = LUA_TNUMFLT;
+                        stack.valsF64[ra] = res;
+                        stack.refs[ra] = null;
+                    } else {
+                        ltm.luaT_trybinTM(L, op1, op2, stack.getTValue(ra), ltm.TMS.TM_IDIV);
+                        stack.syncFromTValue(ra);
+                    }
                 }
                 break;
             }
             case OP_BAND: {
-                let op1 = RKB(L, base, k, i);
-                let op2 = RKC(L, base, k, i);
-                let numberop1, numberop2;
+                const b = i.B;
+                const isKB = (b & 0x100) !== 0;
+                const slotB = isKB ? (b & 0xFF) : (base + b);
+                const tagB  = isKB ? kTags[slotB] : stack.tags[slotB];
+                const valB  = isKB ? kVals[slotB] : stack.valsF64[slotB];
 
-                if ((numberop1 = tointeger(op1)) !== false && (numberop2 = tointeger(op2)) !== false) {
-                    L.stack[ra].setivalue(numberop1 & numberop2);
+                const c = i.C;
+                const isKC = (c & 0x100) !== 0;
+                const slotC = isKC ? (c & 0xFF) : (base + c);
+                const tagC  = isKC ? kTags[slotC] : stack.tags[slotC];
+                const valC  = isKC ? kVals[slotC] : stack.valsF64[slotC];
+
+                if (tagB === LUA_TNUMINT && tagC === LUA_TNUMINT) {
+                    stack.setInteger(ra, (valB | 0) & (valC | 0));
                 } else {
-                    ltm.luaT_trybinTM(L, op1, op2, L.stack[ra], ltm.TMS.TM_BAND);
+                    let op1 = isKB ? k[slotB] : stack.getTValue(slotB);
+                    let op2 = isKC ? k[slotC] : stack.getTValue(slotC);
+                    let n1, n2;
+                    if ((n1 = tointeger(op1)) !== false && (n2 = tointeger(op2)) !== false) {
+                        stack.setInteger(ra, n1 & n2);
+                    } else {
+                        ltm.luaT_trybinTM(L, op1, op2, stack.getTValue(ra), ltm.TMS.TM_BAND);
+                        stack.syncFromTValue(ra);
+                    }
                 }
                 break;
             }
             case OP_BOR: {
-                let op1 = RKB(L, base, k, i);
-                let op2 = RKC(L, base, k, i);
-                let numberop1, numberop2;
+                const b = i.B;
+                const isKB = (b & 0x100) !== 0;
+                const slotB = isKB ? (b & 0xFF) : (base + b);
+                const tagB  = isKB ? kTags[slotB] : stack.tags[slotB];
+                const valB  = isKB ? kVals[slotB] : stack.valsF64[slotB];
 
-                if ((numberop1 = tointeger(op1)) !== false && (numberop2 = tointeger(op2)) !== false) {
-                    L.stack[ra].setivalue(numberop1 | numberop2);
+                const c = i.C;
+                const isKC = (c & 0x100) !== 0;
+                const slotC = isKC ? (c & 0xFF) : (base + c);
+                const tagC  = isKC ? kTags[slotC] : stack.tags[slotC];
+                const valC  = isKC ? kVals[slotC] : stack.valsF64[slotC];
+
+                if (tagB === LUA_TNUMINT && tagC === LUA_TNUMINT) {
+                    stack.setInteger(ra, (valB | 0) | (valC | 0));
                 } else {
-                    ltm.luaT_trybinTM(L, op1, op2, L.stack[ra], ltm.TMS.TM_BOR);
+                    let op1 = isKB ? k[slotB] : stack.getTValue(slotB);
+                    let op2 = isKC ? k[slotC] : stack.getTValue(slotC);
+                    let n1, n2;
+                    if ((n1 = tointeger(op1)) !== false && (n2 = tointeger(op2)) !== false) {
+                        stack.setInteger(ra, n1 | n2);
+                    } else {
+                        ltm.luaT_trybinTM(L, op1, op2, stack.getTValue(ra), ltm.TMS.TM_BOR);
+                        stack.syncFromTValue(ra);
+                    }
                 }
                 break;
             }
             case OP_BXOR: {
-                let op1 = RKB(L, base, k, i);
-                let op2 = RKC(L, base, k, i);
-                let numberop1, numberop2;
+                const b = i.B;
+                const isKB = (b & 0x100) !== 0;
+                const slotB = isKB ? (b & 0xFF) : (base + b);
+                const tagB  = isKB ? kTags[slotB] : stack.tags[slotB];
+                const valB  = isKB ? kVals[slotB] : stack.valsF64[slotB];
 
-                if ((numberop1 = tointeger(op1)) !== false && (numberop2 = tointeger(op2)) !== false) {
-                    L.stack[ra].setivalue(numberop1 ^ numberop2);
+                const c = i.C;
+                const isKC = (c & 0x100) !== 0;
+                const slotC = isKC ? (c & 0xFF) : (base + c);
+                const tagC  = isKC ? kTags[slotC] : stack.tags[slotC];
+                const valC  = isKC ? kVals[slotC] : stack.valsF64[slotC];
+
+                if (tagB === LUA_TNUMINT && tagC === LUA_TNUMINT) {
+                    stack.setInteger(ra, (valB | 0) ^ (valC | 0));
                 } else {
-                    ltm.luaT_trybinTM(L, op1, op2, L.stack[ra], ltm.TMS.TM_BXOR);
+                    let op1 = isKB ? k[slotB] : stack.getTValue(slotB);
+                    let op2 = isKC ? k[slotC] : stack.getTValue(slotC);
+                    let n1, n2;
+                    if ((n1 = tointeger(op1)) !== false && (n2 = tointeger(op2)) !== false) {
+                        stack.setInteger(ra, n1 ^ n2);
+                    } else {
+                        ltm.luaT_trybinTM(L, op1, op2, stack.getTValue(ra), ltm.TMS.TM_BXOR);
+                        stack.syncFromTValue(ra);
+                    }
                 }
                 break;
             }
             case OP_SHL: {
-                let op1 = RKB(L, base, k, i);
-                let op2 = RKC(L, base, k, i);
-                let numberop1, numberop2;
+                const b = i.B;
+                const isKB = (b & 0x100) !== 0;
+                const slotB = isKB ? (b & 0xFF) : (base + b);
+                const tagB  = isKB ? kTags[slotB] : stack.tags[slotB];
+                const valB  = isKB ? kVals[slotB] : stack.valsF64[slotB];
 
-                if ((numberop1 = tointeger(op1)) !== false && (numberop2 = tointeger(op2)) !== false) {
-                    L.stack[ra].setivalue(luaV_shiftl(numberop1, numberop2));
+                const c = i.C;
+                const isKC = (c & 0x100) !== 0;
+                const slotC = isKC ? (c & 0xFF) : (base + c);
+                const tagC  = isKC ? kTags[slotC] : stack.tags[slotC];
+                const valC  = isKC ? kVals[slotC] : stack.valsF64[slotC];
+
+                if (tagB === LUA_TNUMINT && tagC === LUA_TNUMINT) {
+                    stack.setInteger(ra, luaV_shiftl(valB | 0, valC | 0));
                 } else {
-                    ltm.luaT_trybinTM(L, op1, op2, L.stack[ra], ltm.TMS.TM_SHL);
+                    let op1 = isKB ? k[slotB] : stack.getTValue(slotB);
+                    let op2 = isKC ? k[slotC] : stack.getTValue(slotC);
+                    let n1, n2;
+                    if ((n1 = tointeger(op1)) !== false && (n2 = tointeger(op2)) !== false) {
+                        stack.setInteger(ra, luaV_shiftl(n1, n2));
+                    } else {
+                        ltm.luaT_trybinTM(L, op1, op2, stack.getTValue(ra), ltm.TMS.TM_SHL);
+                        stack.syncFromTValue(ra);
+                    }
                 }
                 break;
             }
             case OP_SHR: {
-                let op1 = RKB(L, base, k, i);
-                let op2 = RKC(L, base, k, i);
-                let numberop1, numberop2;
+                const b = i.B;
+                const isKB = (b & 0x100) !== 0;
+                const slotB = isKB ? (b & 0xFF) : (base + b);
+                const tagB  = isKB ? kTags[slotB] : stack.tags[slotB];
+                const valB  = isKB ? kVals[slotB] : stack.valsF64[slotB];
 
-                if ((numberop1 = tointeger(op1)) !== false && (numberop2 = tointeger(op2)) !== false) {
-                    L.stack[ra].setivalue(luaV_shiftl(numberop1, -numberop2));
+                const c = i.C;
+                const isKC = (c & 0x100) !== 0;
+                const slotC = isKC ? (c & 0xFF) : (base + c);
+                const tagC  = isKC ? kTags[slotC] : stack.tags[slotC];
+                const valC  = isKC ? kVals[slotC] : stack.valsF64[slotC];
+
+                if (tagB === LUA_TNUMINT && tagC === LUA_TNUMINT) {
+                    stack.setInteger(ra, luaV_shiftl(valB | 0, -(valC | 0)));
                 } else {
-                    ltm.luaT_trybinTM(L, op1, op2, L.stack[ra], ltm.TMS.TM_SHR);
+                    let op1 = isKB ? k[slotB] : stack.getTValue(slotB);
+                    let op2 = isKC ? k[slotC] : stack.getTValue(slotC);
+                    let n1, n2;
+                    if ((n1 = tointeger(op1)) !== false && (n2 = tointeger(op2)) !== false) {
+                        stack.setInteger(ra, luaV_shiftl(n1, -n2));
+                    } else {
+                        ltm.luaT_trybinTM(L, op1, op2, stack.getTValue(ra), ltm.TMS.TM_SHR);
+                        stack.syncFromTValue(ra);
+                    }
                 }
                 break;
             }
             case OP_UNM: {
-                let op = L.stack[RB(L, base, i)];
-                let numberop;
-
-                if (op.ttisinteger()) {
-                    L.stack[ra].setivalue((-op.value)|0);
-                } else if ((numberop = tonumber(op)) !== false) {
-                    L.stack[ra].setfltvalue(-numberop);
+                let slotB = base + i.B;
+                let tag = stack.tags[slotB];
+                let val = stack.valsF64[slotB];
+                if (tag === LUA_TNUMINT) {
+                    stack.setInteger(ra, (-val) | 0);
+                } else if (tag === LUA_TNUMFLT) {
+                    stack.setNumber(ra, -val);
                 } else {
-                    ltm.luaT_trybinTM(L, op, op, L.stack[ra], ltm.TMS.TM_UNM);
+                    let op = stack.getTValue(slotB);
+                    let n;
+                    if ((n = tonumber(op)) !== false) {
+                        stack.setNumber(ra, -n);
+                    } else {
+                        ltm.luaT_trybinTM(L, op, op, stack.getTValue(ra), ltm.TMS.TM_UNM);
+                        stack.syncFromTValue(ra);
+                    }
                 }
                 break;
             }
             case OP_BNOT: {
-                let op = L.stack[RB(L, base, i)];
-
-                if (op.ttisinteger()) {
-                    L.stack[ra].setivalue(~op.value);
+                let slotB = base + i.B;
+                let tag = stack.tags[slotB];
+                let val = stack.valsF64[slotB];
+                if (tag === LUA_TNUMINT) {
+                    stack.setInteger(ra, ~(val | 0));
                 } else {
-                    ltm.luaT_trybinTM(L, op, op, L.stack[ra], ltm.TMS.TM_BNOT);
+                    let op = stack.getTValue(slotB);
+                    let n;
+                    if ((n = tointeger(op)) !== false) {
+                        stack.setInteger(ra, ~n);
+                    } else {
+                        ltm.luaT_trybinTM(L, op, op, stack.getTValue(ra), ltm.TMS.TM_BNOT);
+                        stack.syncFromTValue(ra);
+                    }
                 }
                 break;
             }
             case OP_NOT: {
-                let op = L.stack[RB(L, base, i)];
-                L.stack[ra].setbvalue(op.l_isfalse());
+                let slotB = base + i.B;
+                let tag = stack.tags[slotB];
+                let isfalse = (tag === LUA_TNIL) || (tag === LUA_TBOOLEAN && stack.valsF64[slotB] === 0);
+                stack.setBoolean(ra, isfalse);
                 break;
             }
             case OP_LEN: {
-                luaV_objlen(L, L.stack[ra], L.stack[RB(L, base, i)]);
+                let rb = RB(L, base, i);
+                luaV_objlen(L, stack.getTValue(ra), stack.getTValue(rb));
+                stack.syncFromTValue(ra);
                 break;
             }
             case OP_CONCAT: {
                 let b = i.B;
                 let c = i.C;
+                for (let s = b; s <= c; s++) {
+                    stack.getTValue(base + s);
+                }
                 L.top = base + c + 1; /* mark the end of concat operands */
                 luaV_concat(L, c - b + 1);
                 let rb = base + b;
                 lobject.setobjs2s(L, ra, rb);
                 ldo.adjust_top(L, ci.top); /* restore top */
+                stack.syncFromTValue(ra);
                 break;
             }
             case OP_JMP: {
-                dojump(L, ci, i, 0);
+                if (i.A !== 0) lfunc.luaF_close(L, ci.l_base + i.A - 1);
+                ci.l_savedpc += i.sBx;
                 break;
             }
             case OP_EQ: {
-                if (luaV_equalobj(L, RKB(L, base, k, i), RKC(L, base, k, i)) !== i.A)
+                if ((L.hookmask & (lstate.LUA_MASKLINE | lstate.LUA_MASKCOUNT)) !== 0) {
+                    let b = i.B;
+                    let op1 = (b & 0x100) ? k[b & 0xFF] : stack[base + b];
+                    let c = i.C;
+                    let op2 = (c & 0x100) ? k[c & 0xFF] : stack[base + c];
+                    let res;
+                    if (op1.type === op2.type && (op1.type === LUA_TNUMINT || op1.type === LUA_TNUMFLT || op1.type === LUA_TBOOLEAN)) {
+                        res = (op1.value === op2.value) ? 1 : 0;
+                    } else {
+                        res = luaV_equalobj(L, op1, op2);
+                    }
+                    if (res !== i.A)
+                        ci.l_savedpc++;
+                    else
+                        donextjump(L, ci);
+                    break;
+                }
+
+                const b = i.B;
+                const isKB = (b & 0x100) !== 0;
+                const slotB = isKB ? (b & 0xFF) : (base + b);
+                const tagB  = isKB ? kTags[slotB] : stack.tags[slotB];
+                const valB  = isKB ? kVals[slotB] : stack.valsF64[slotB];
+
+                const c = i.C;
+                const isKC = (c & 0x100) !== 0;
+                const slotC = isKC ? (c & 0xFF) : (base + c);
+                const tagC  = isKC ? kTags[slotC] : stack.tags[slotC];
+                const valC  = isKC ? kVals[slotC] : stack.valsF64[slotC];
+
+                const isNumB = (tagB === LUA_TNUMINT || tagB === LUA_TNUMFLT);
+                const isNumC = (tagC === LUA_TNUMINT || tagC === LUA_TNUMFLT);
+                if ((isNumB && isNumC) || (tagB === tagC && tagB === LUA_TBOOLEAN)) {
+                    const cond = valB === valC;
+                    if (cond !== (i.A !== 0)) {
+                        ci.l_savedpc++;
+                    } else {
+                        const jmpInst = ci.l_code[ci.l_savedpc];
+                        if (jmpInst.A !== 0) lfunc.luaF_close(L, ci.l_base + jmpInst.A - 1);
+                        ci.l_savedpc += jmpInst.sBx + 1;
+                    }
+                    break;
+                }
+
+                const op1 = isKB ? k[slotB] : stack.getTValue(slotB);
+                const op2 = isKC ? k[slotC] : stack.getTValue(slotC);
+                let res = luaV_equalobj(L, op1, op2);
+                if (res !== i.A)
                     ci.l_savedpc++;
                 else
                     donextjump(L, ci);
                 break;
             }
             case OP_LT: {
-                if (luaV_lessthan(L, RKB(L, base, k, i), RKC(L, base, k, i)) !== i.A)
+                if ((L.hookmask & (lstate.LUA_MASKLINE | lstate.LUA_MASKCOUNT)) !== 0) {
+                    let b = i.B;
+                    let op1 = (b & 0x100) ? k[b & 0xFF] : stack.getTValue(base + b);
+                    let c = i.C;
+                    let op2 = (c & 0x100) ? k[c & 0xFF] : stack.getTValue(base + c);
+                    let res;
+                    if (op1.type === LUA_TNUMINT && op2.type === LUA_TNUMINT) {
+                        res = (op1.value < op2.value) ? 1 : 0;
+                    } else if (op1.type === LUA_TNUMFLT && op2.type === LUA_TNUMFLT) {
+                        res = (op1.value < op2.value) ? 1 : 0;
+                    } else {
+                        res = luaV_lessthan(L, op1, op2);
+                    }
+                    if (res !== i.A)
+                        ci.l_savedpc++;
+                    else
+                        donextjump(L, ci);
+                    break;
+                }
+
+                const b = i.B;
+                const isKB = (b & 0x100) !== 0;
+                const slotB = isKB ? (b & 0xFF) : (base + b);
+                const tagB  = isKB ? kTags[slotB] : stack.tags[slotB];
+                const valB  = isKB ? kVals[slotB] : stack.valsF64[slotB];
+
+                const c = i.C;
+                const isKC = (c & 0x100) !== 0;
+                const slotC = isKC ? (c & 0xFF) : (base + c);
+                const tagC  = isKC ? kTags[slotC] : stack.tags[slotC];
+                const valC  = isKC ? kVals[slotC] : stack.valsF64[slotC];
+
+                if ((tagB === LUA_TNUMINT || tagB === LUA_TNUMFLT) &&
+                    (tagC === LUA_TNUMINT || tagC === LUA_TNUMFLT)) {
+                    const cond = valB < valC;
+                    if (cond !== (i.A !== 0)) {
+                        ci.l_savedpc++;
+                    } else {
+                        const jmpInst = ci.l_code[ci.l_savedpc];
+                        if (jmpInst.A !== 0) lfunc.luaF_close(L, ci.l_base + jmpInst.A - 1);
+                        ci.l_savedpc += jmpInst.sBx + 1;
+                    }
+                    break;
+                }
+
+                const op1 = isKB ? k[slotB] : stack.getTValue(slotB);
+                const op2 = isKC ? k[slotC] : stack.getTValue(slotC);
+                let res = luaV_lessthan(L, op1, op2);
+                if (res !== i.A)
                     ci.l_savedpc++;
                 else
                     donextjump(L, ci);
                 break;
             }
             case OP_LE: {
-                if (luaV_lessequal(L, RKB(L, base, k, i), RKC(L, base, k, i)) !== i.A)
+                if ((L.hookmask & (lstate.LUA_MASKLINE | lstate.LUA_MASKCOUNT)) !== 0) {
+                    let b = i.B;
+                    let op1 = (b & 0x100) ? k[b & 0xFF] : stack.getTValue(base + b);
+                    let c = i.C;
+                    let op2 = (c & 0x100) ? k[c & 0xFF] : stack.getTValue(base + c);
+                    let res;
+                    if (op1.type === LUA_TNUMINT && op2.type === LUA_TNUMINT) {
+                        res = (op1.value <= op2.value) ? 1 : 0;
+                    } else if (op1.type === LUA_TNUMFLT && op2.type === LUA_TNUMFLT) {
+                        res = (op1.value <= op2.value) ? 1 : 0;
+                    } else {
+                        res = luaV_lessequal(L, op1, op2);
+                    }
+                    if (res !== i.A)
+                        ci.l_savedpc++;
+                    else
+                        donextjump(L, ci);
+                    break;
+                }
+
+                const b = i.B;
+                const isKB = (b & 0x100) !== 0;
+                const slotB = isKB ? (b & 0xFF) : (base + b);
+                const tagB  = isKB ? kTags[slotB] : stack.tags[slotB];
+                const valB  = isKB ? kVals[slotB] : stack.valsF64[slotB];
+
+                const c = i.C;
+                const isKC = (c & 0x100) !== 0;
+                const slotC = isKC ? (c & 0xFF) : (base + c);
+                const tagC  = isKC ? kTags[slotC] : stack.tags[slotC];
+                const valC  = isKC ? kVals[slotC] : stack.valsF64[slotC];
+
+                if ((tagB === LUA_TNUMINT || tagB === LUA_TNUMFLT) &&
+                    (tagC === LUA_TNUMINT || tagC === LUA_TNUMFLT)) {
+                    const cond = valB <= valC;
+                    if (cond !== (i.A !== 0)) {
+                        ci.l_savedpc++;
+                    } else {
+                        const jmpInst = ci.l_code[ci.l_savedpc];
+                        if (jmpInst.A !== 0) lfunc.luaF_close(L, ci.l_base + jmpInst.A - 1);
+                        ci.l_savedpc += jmpInst.sBx + 1;
+                    }
+                    break;
+                }
+
+                const op1 = isKB ? k[slotB] : stack.getTValue(slotB);
+                const op2 = isKC ? k[slotC] : stack.getTValue(slotC);
+                let res = luaV_lessequal(L, op1, op2);
+                if (res !== i.A)
                     ci.l_savedpc++;
                 else
                     donextjump(L, ci);
                 break;
             }
             case OP_TEST: {
-                if (i.C ? L.stack[ra].l_isfalse() : !L.stack[ra].l_isfalse())
-                    ci.l_savedpc++;
-                else
-                    donextjump(L, ci);
+                if ((L.hookmask & (lstate.LUA_MASKLINE | lstate.LUA_MASKCOUNT)) !== 0) {
+                    if (i.C ? stack.getTValue(ra).l_isfalse() : !stack.getTValue(ra).l_isfalse())
+                        ci.l_savedpc++;
+                    else
+                        donextjump(L, ci);
+                    break;
+                }
+                const tag = stack.tags[ra];
+                const isfalse = (tag === LUA_TNIL) || (tag === LUA_TBOOLEAN && stack.valsF64[ra] === 0);
+                const cond = (i.C !== 0) ? isfalse : !isfalse;
+                const nextInst = cl.p.code[ci.l_savedpc++];
+                if (!cond) {
+                    if (nextInst.A !== 0) lfunc.luaF_close(L, ci.l_base + nextInst.A - 1);
+                    ci.l_savedpc += nextInst.sBx;
+                }
                 break;
             }
             case OP_TESTSET: {
-                let rbIdx = RB(L, base, i);
-                let rb = L.stack[rbIdx];
-                if (i.C ? rb.l_isfalse() : !rb.l_isfalse())
+                let rbSlot = base + i.B;
+                let tag = stack.tags[rbSlot];
+                let isfalse = (tag === LUA_TNIL) || (tag === LUA_TBOOLEAN && stack.valsF64[rbSlot] === 0);
+                if (i.C ? isfalse : !isfalse)
                     ci.l_savedpc++;
                 else {
-                    lobject.setobjs2s(L, ra, rbIdx);
+                    stack.copy(ra, rbSlot);
                     donextjump(L, ci);
                 }
                 break;
@@ -517,6 +1076,11 @@ const luaV_execute = function(L) {
                 if (ldo.luaD_precall(L, ra, nresults)) {
                     if (nresults >= 0)
                         ldo.adjust_top(L, ci.top);  /* adjust results */
+                    if (nresults > 0) {
+                        stack.syncRange(ra, ra + nresults);
+                    } else if (nresults < 0) {
+                        stack.syncRange(ra, L.top);
+                    }
                 } else {
                     ci = L.ci;
                     continue newframe;
@@ -547,6 +1111,10 @@ const luaV_execute = function(L) {
                     oci.callstatus |= lstate.CIST_TAIL;
                     oci.next = null;
                     ci = L.ci = oci;
+                    if (L.cfs) {
+                        L.cfs.ptr = oci.cfs_ptr;
+                        L.cfs.push(ofuncOff, oci.l_base, oci.top, 0, oci.nresults, oci.callstatus, nfunc);
+                    }
 
                     lua_assert(L.top === oci.l_base + L.stack[ofuncOff].value.p.maxstacksize);
 
@@ -562,57 +1130,71 @@ const luaV_execute = function(L) {
                     return; /* external invocation: return */
                 /* invocation via reentry: continue execution */
                 ci = L.ci;
-                if (b) ldo.adjust_top(L, ci.top);
+                if (b) L.top = ci.top;
                 lua_assert(ci.callstatus & lstate.CIST_LUA);
                 lua_assert(ci.l_code[ci.l_savedpc - 1].opcode === OP_CALL);
                 continue newframe;
             }
             case OP_FORLOOP: {
-                if (L.stack[ra].ttisinteger()) { /* integer loop? */
-                    let step = L.stack[ra + 2].value;
-                    let idx = (L.stack[ra].value + step)|0;
-                    let limit = L.stack[ra + 1].value;
+                if (stack.tags[ra] === LUA_TNUMINT) {
+                    const step = stack.valsF64[ra + 2];
+                    const idx = stack.valsF64[ra] + step;
+                    const limit = stack.valsF64[ra + 1];
 
                     if (0 < step ? idx <= limit : limit <= idx) {
                         ci.l_savedpc += i.sBx;
-                        L.stack[ra].chgivalue(idx);  /* update internal index... */
-                        L.stack[ra + 3].setivalue(idx);
+                        stack.valsF64[ra] = idx;
+                        stack.valsF64[ra + 3] = idx;
+                        stack.tags[ra + 3] = LUA_TNUMINT;
+                        stack.refs[ra] = null;
+                        stack.refs[ra + 3] = null;
+                        let tv0 = stack[ra];
+                        if (tv0) { tv0.value = idx; }
+                        let tv3 = stack[ra + 3];
+                        if (tv3) { tv3.type = LUA_TNUMINT; tv3.value = idx; }
                     }
-                } else { /* floating loop */
-                    let step = L.stack[ra + 2].value;
-                    let idx = L.stack[ra].value + step;
-                    let limit = L.stack[ra + 1].value;
+                } else {
+                    const step = stack.valsF64[ra + 2];
+                    const idx = stack.valsF64[ra] + step;
+                    const limit = stack.valsF64[ra + 1];
 
                     if (0 < step ? idx <= limit : limit <= idx) {
                         ci.l_savedpc += i.sBx;
-                        L.stack[ra].chgfltvalue(idx);  /* update internal index... */
-                        L.stack[ra + 3].setfltvalue(idx);
+                        stack.valsF64[ra] = idx;
+                        stack.valsF64[ra + 3] = idx;
+                        stack.tags[ra + 3] = LUA_TNUMFLT;
+                        stack.refs[ra] = null;
+                        stack.refs[ra + 3] = null;
+                        let tv0 = stack[ra];
+                        if (tv0) { tv0.value = idx; }
+                        let tv3 = stack[ra + 3];
+                        if (tv3) { tv3.type = LUA_TNUMFLT; tv3.value = idx; }
                     }
                 }
                 break;
             }
             case OP_FORPREP: {
-                let init = L.stack[ra];
-                let plimit = L.stack[ra + 1];
-                let pstep = L.stack[ra + 2];
+                let init = L.stack.getTValue ? L.stack.getTValue(ra) : L.stack[ra];
+                let plimit = L.stack.getTValue ? L.stack.getTValue(ra + 1) : L.stack[ra + 1];
+                let pstep = L.stack.getTValue ? L.stack.getTValue(ra + 2) : L.stack[ra + 2];
                 let forlim;
 
                 if (init.ttisinteger() && pstep.ttisinteger() && (forlim = forlimit(plimit, pstep.value))) {
                     /* all values are integer */
                     let initv = forlim.stopnow ? 0 : init.value;
-                    plimit.value = forlim.ilimit;
-                    init.value = (initv - pstep.value)|0;
+                    stack.setInteger(ra + 1, forlim.ilimit);
+                    stack.setInteger(ra, initv - pstep.value);
                 } else { /* try making all values floats */
                     let nlimit, nstep, ninit;
                     if ((nlimit = tonumber(plimit)) === false)
                         ldebug.luaG_runerror(L, to_luastring("'for' limit must be a number", true));
-                    L.stack[ra + 1].setfltvalue(nlimit);
+                    stack.setNumber(ra + 1, nlimit);
                     if ((nstep = tonumber(pstep)) === false)
                         ldebug.luaG_runerror(L, to_luastring("'for' step must be a number", true));
-                    L.stack[ra + 2].setfltvalue(nstep);
+                    stack.setNumber(ra + 2, nstep);
                     if ((ninit = tonumber(init)) === false)
                         ldebug.luaG_runerror(L, to_luastring("'for' initial value must be a number", true));
-                    L.stack[ra].setfltvalue(ninit - nstep);
+                    stack.setNumber(ra, ninit - nstep);
                 }
 
                 ci.l_savedpc += i.sBx;
@@ -650,12 +1232,13 @@ const luaV_execute = function(L) {
                     c = ci.l_code[ci.l_savedpc++].Ax;
                 }
 
-                let h = L.stack[ra].value;
+                let h = stack.refs[ra] || L.stack[ra].value;
                 let last = ((c - 1) * LFIELDS_PER_FLUSH) + n;
 
                 for (; n > 0; n--) {
-                    ltable.luaH_setint(h, last--, L.stack[ra + n]);
+                    ltable.luaH_setint_from_stack(L, h, last--, stack, ra + n, false, null, null, null);
                 }
+                ltable.invalidateTMcache(h);
                 ldo.adjust_top(L, ci.top);  /* correct top (in case of previous open call) */
                 break;
             }
@@ -666,6 +1249,7 @@ const luaV_execute = function(L) {
                     pushclosure(L, p, cl.upvals, base, ra);  /* create a new one */
                 else
                     L.stack[ra].setclLvalue(ncl);
+                stack.syncFromTValue(ra);
                 break;
             }
             case OP_VARARG: {
@@ -682,11 +1266,14 @@ const luaV_execute = function(L) {
                     ldo.adjust_top(L, ra + n);
                 }
 
-                for (j = 0; j < b && j < n; j++)
+                for (j = 0; j < b && j < n; j++) {
                     lobject.setobjs2s(L, ra + j, base - n + j);
+                    stack.syncFromTValue(ra + j);
+                }
 
-                for (; j < b; j++) /* complete required results with nil */
-                    L.stack[ra + j].setnilvalue();
+                for (; j < b; j++) {
+                    stack.setNil(ra + j);
+                }
                 break;
             }
             case OP_EXTRAARG: {
@@ -1015,6 +1602,8 @@ const tostring = function(L, i) {
 
     if (cvt2str(o)) {
         lobject.luaO_tostring(L, o);
+        if (L.stack && L.stack.syncFromTValue)
+            L.stack.syncFromTValue(i);
         return true;
     }
 
@@ -1049,6 +1638,8 @@ const luaV_concat = function(L, total) {
 
         if (!(L.stack[top-2].ttisstring() || cvt2str(L.stack[top-2])) || !tostring(L, top - 1)) {
             ltm.luaT_trybinTM(L, L.stack[top-2], L.stack[top-1], L.stack[top-2], ltm.TMS.TM_CONCAT);
+            if (L.stack && L.stack.syncFromTValue)
+                L.stack.syncFromTValue(top - 2);
         } else if (isemptystr(L.stack[top-1])) {
             tostring(L, top - 2);
         } else if (isemptystr(L.stack[top-2])) {
@@ -1068,8 +1659,7 @@ const luaV_concat = function(L, total) {
         }
         total -= n - 1; /* got 'n' strings to create 1 new */
         /* popped 'n' strings and pushed one */
-        for (; L.top > top-(n-1);)
-            delete L.stack[--L.top];
+        L.top = top - (n - 1);
     } while (total > 1); /* repeat until only 1 result left */
 };
 
@@ -1092,7 +1682,10 @@ const luaV_gettable = function(L, t, key, ra) {
             } else { /* 't' is a table */
                 tm = ltm.fasttm(L, t.value.metatable, ltm.TMS.TM_INDEX);  /* table's metamethod */
                 if (tm === null) { /* no metamethod? */
-                    L.stack[ra].setnilvalue(); /* result is nil */
+                    if (L.stack.setNil)
+                        L.stack.setNil(ra);
+                    else
+                        L.stack[ra].setnilvalue(); /* result is nil */
                     return;
                 }
             }
@@ -1100,6 +1693,8 @@ const luaV_gettable = function(L, t, key, ra) {
         }
         if (tm.ttisfunction()) { /* is metamethod a function? */
             ltm.luaT_callTM(L, tm, t, key, L.stack[ra], 1); /* call it */
+            if (L.stack && L.stack.syncFromTValue)
+                L.stack.syncFromTValue(ra);
             return;
         }
         t = tm;  /* else try to access 'tm[key]' */

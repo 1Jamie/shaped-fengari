@@ -250,6 +250,9 @@ class TValue {
     setfrom(tv) { /* in lua C source setobj2t is often used for this */
         this.type = tv.type;
         this.value = tv.value;
+        if (this.ownerStack) {
+            this.ownerStack.syncFromTValue(this.ownerSlot);
+        }
     }
 
     tsvalue() {
@@ -266,26 +269,100 @@ class TValue {
     }
 
     jsstring(from, to) {
+        if (from === void 0 && to === void 0 && this.value && this.value.tojsstring) {
+            return this.value.tojsstring();
+        }
         return to_jsstring(this.svalue(), from, to, true);
     }
 }
 
+class TValuePool {
+    constructor(capacity = 1024) {
+        this.pool = new Array(capacity);
+        this.top = 0;
+        for (let i = 0; i < capacity; i++) {
+            this.pool[i] = new TValue(LUA_TNIL, null);
+        }
+    }
+
+    acquire(type = LUA_TNIL, value = null) {
+        if (this.top > 0) {
+            const tv = this.pool[--this.top];
+            tv.type = type;
+            tv.value = value;
+            return tv;
+        }
+        return new TValue(type, value);
+    }
+
+    release(tv) {
+        if (this.top < this.pool.length) {
+            tv.type = LUA_TNIL;
+            tv.value = null;
+            this.pool[this.top++] = tv;
+        }
+    }
+}
+
+const luaO_acquire = function(L, type = LUA_TNIL, value = null) {
+    if (L && L.l_G && L.l_G.tvalue_pool) {
+        return L.l_G.tvalue_pool.acquire(type, value);
+    }
+    return new TValue(type, value);
+};
+
+const luaO_release = function(L, tv) {
+    if (L && L.l_G && L.l_G.tvalue_pool && tv instanceof TValue) {
+        L.l_G.tvalue_pool.release(tv);
+    }
+};
+
 const pushobj2s = function(L, tv) {
-    L.stack[L.top++] = new TValue(tv.type, tv.value);
+    let slot = L.stack[L.top];
+    if (!slot || slot === luaO_nilobject)
+        L.stack[L.top] = slot = luaO_acquire(L, tv.type, tv.value);
+    else
+        slot.setfrom(tv);
+    if (L.stack.syncFromTValue)
+        L.stack.syncFromTValue(L.top);
+    L.top++;
 };
 const pushsvalue2s = function(L, ts) {
-    L.stack[L.top++] = new TValue(LUA_TLNGSTR, ts);
+    let slot = L.stack[L.top];
+    if (!slot || slot === luaO_nilobject)
+        L.stack[L.top] = slot = luaO_acquire(L, LUA_TLNGSTR, ts);
+    else
+        slot.setsvalue(ts);
+    if (L.stack.syncFromTValue)
+        L.stack.syncFromTValue(L.top);
+    L.top++;
 };
 /* from stack to (same) stack */
 const setobjs2s = function(L, newidx, oldidx) {
-    L.stack[newidx].setfrom(L.stack[oldidx]);
+    if (L.stack && L.stack.copy) {
+        L.stack.copy(newidx, oldidx);
+    } else {
+        L.stack[newidx].setfrom(L.stack[oldidx]);
+    }
 };
 /* to stack (not from same stack) */
 const setobj2s = function(L, newidx, oldtv) {
-    L.stack[newidx].setfrom(oldtv);
+    let slot = L.stack[newidx];
+    if (!slot)
+        L.stack[newidx] = slot = new TValue(oldtv.type, oldtv.value);
+    else
+        slot.setfrom(oldtv);
+    if (L.stack && L.stack.syncFromTValue)
+        L.stack.syncFromTValue(newidx);
 };
 const setsvalue2s = function(L, newidx, ts) {
-    L.stack[newidx].setsvalue(ts);
+    let slot = L.stack[newidx];
+    if (!slot)
+        L.stack[newidx] = slot = new TValue(LUA_TLNGSTR, ts);
+    else
+        slot.setsvalue(ts);
+    if (L.stack && L.stack.syncFromTValue)
+        L.stack.syncFromTValue(newidx);
 };
 
 const luaO_nilobject = new TValue(LUA_TNIL, null);
@@ -638,11 +715,13 @@ const luaO_pushvfstring = function(L, fmt, argp) {
                 ldo.luaD_inctop(L);
                 L.stack[L.top-1].setivalue(argp[a++]);
                 luaO_tostring(L, L.stack[L.top-1]);
+                if (L.stack.syncFromTValue) L.stack.syncFromTValue(L.top - 1);
                 break;
             case 102 /* ('f').charCodeAt(0) */:
                 ldo.luaD_inctop(L);
                 L.stack[L.top-1].setfltvalue(argp[a++]);
                 luaO_tostring(L, L.stack[L.top-1]);
+                if (L.stack.syncFromTValue) L.stack.syncFromTValue(L.top - 1);
                 break;
             case 112 /* ('p').charCodeAt(0) */: {
                 let v = argp[a++];
@@ -733,6 +812,13 @@ const luaO_int2fb = function(x) {
     return ((e+1) << 3) | (x - 8);
 };
 
+/* converts back */
+const luaO_fb2int = function(x) {
+    const e = (x >>> 3) & 0x1f;
+    if (e === 0) return x;
+    return ((x & 7) + 8) << (e - 1);
+};
+
 const intarith = function(L, op, v1, v2) {
     switch (op) {
         case LUA_OPADD:  return (v1 + v2)|0;
@@ -818,6 +904,7 @@ module.exports.UTF8BUFFSZ        = UTF8BUFFSZ;
 module.exports.luaO_arith        = luaO_arith;
 module.exports.luaO_chunkid      = luaO_chunkid;
 module.exports.luaO_hexavalue    = luaO_hexavalue;
+module.exports.luaO_fb2int       = luaO_fb2int;
 module.exports.luaO_int2fb       = luaO_int2fb;
 module.exports.luaO_pushfstring  = luaO_pushfstring;
 module.exports.luaO_pushvfstring = luaO_pushvfstring;
@@ -830,3 +917,6 @@ module.exports.pushsvalue2s      = pushsvalue2s;
 module.exports.setobjs2s         = setobjs2s;
 module.exports.setobj2s          = setobj2s;
 module.exports.setsvalue2s       = setsvalue2s;
+module.exports.TValuePool        = TValuePool;
+module.exports.luaO_acquire      = luaO_acquire;
+module.exports.luaO_release      = luaO_release;

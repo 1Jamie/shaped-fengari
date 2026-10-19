@@ -174,14 +174,18 @@ const to_uristring = function(a) {
     return s;
 };
 
-const to_luastring_cache = {};
+const to_luastring_cache = Object.create(null);
 
 const to_luastring = function(str, cache) {
     if (typeof str !== "string") throw new TypeError("to_luastring expects a javascript string");
 
+    if (cache === void 0) {
+        cache = (str.length <= 64);
+    }
+
     if (cache) {
         let cached = to_luastring_cache[str];
-        if (is_luastring(cached)) return cached;
+        if (cached !== void 0) return cached;
     }
 
     let len = str.length;

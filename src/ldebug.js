@@ -158,7 +158,7 @@ const lua_getlocal = function(L, ar, n) {
         let local = findlocal(L, ar.i_ci, n);
         if (local) {
             name = local.name;
-            lobject.pushobj2s(L, L.stack[local.pos]);
+            lobject.pushobj2s(L, L.stack.getTValue ? L.stack.getTValue(local.pos) : L.stack[local.pos]);
             api_check(L, L.top <= L.ci.top, "stack overflow");
         } else {
             name = null;
@@ -175,7 +175,7 @@ const lua_setlocal = function(L, ar, n) {
     if (local) {
         name = local.name;
         lobject.setobjs2s(L, local.pos, L.top - 1);
-        delete L.stack[--L.top];  /* pop value */
+        --L.top;  /* pop value */
     } else {
         name = null;
     }

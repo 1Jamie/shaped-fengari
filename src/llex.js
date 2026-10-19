@@ -210,7 +210,7 @@ const luaX_newstring = function(ls, str) {
     let L = ls.L;
     let ts = luaS_new(L, str);
     /* HACK: Workaround lack of ltable 'keyfromval' */
-    let tpair = ls.h.strong.get(luaS_hashlongstr(ts));
+    let tpair = ls.h._strong ? ls.h._strong.get(luaS_hashlongstr(ts)) : null;
     if (!tpair) { /* not in use yet? */
         let key = new lobject.TValue(LUA_TLNGSTR, ts);
         ltable.luaH_setfrom(L, ls.h, key, TVtrue);
