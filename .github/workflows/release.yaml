@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name for release (optional, defaults to vX.X.X from package.json)'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -44,9 +49,23 @@ jobs:
           tar -czvf shaped-fengari-dist.tar.gz -C dist .
           zip -r shaped-fengari-dist.zip dist/
 
+      - name: Determine tag name
+        id: vars
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          elif [ -n "${{ inputs.tag_name }}" ]; then
+            echo "tag=${{ inputs.tag_name }}" >> $GITHUB_OUTPUT
+          else
+            VERSION=$(node -p "require('./package.json').version")
+            echo "tag=v${VERSION}" >> $GITHUB_OUTPUT
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name: Release ${{ steps.vars.outputs.tag }}
           generate_release_notes: true
           files: |
             dist/shaped-fengari.js
