@@ -31,15 +31,42 @@ jobs:
       - name: Run lint
         run: npm run lint
 
+      - name: Build distribution bundles
+        run: npm run build
+
       - name: Run test suite
         run: npm test -- --maxWorkers=$(nproc)
         env:
           FENGARICONF: '{"LUAI_MAXSTACK":100000}'
 
+      - name: Package standalone distribution archives
+        run: |
+          tar -czvf shaped-fengari-dist.tar.gz -C dist .
+          zip -r shaped-fengari-dist.zip dist/
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          files: |
+            dist/shaped-fengari.js
+            dist/shaped-fengari.js.map
+            dist/shaped-fengari.min.js
+            dist/shaped-fengari.min.js.map
+            dist/shaped-fengari.mjs
+            dist/shaped-fengari.mjs.map
+            dist/shaped-fengari.min.mjs
+            dist/shaped-fengari.min.mjs.map
+            dist/shaped-fengari.esm.js
+            dist/shaped-fengari.esm.js.map
+            dist/shaped-fengari.esm.min.js
+            dist/shaped-fengari.esm.min.js.map
+            dist/shaped-fengari.cjs
+            dist/shaped-fengari.cjs.map
+            dist/fengari.js
+            dist/fengari.min.js
+            shaped-fengari-dist.tar.gz
+            shaped-fengari-dist.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

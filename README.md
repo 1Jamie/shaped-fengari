@@ -24,12 +24,70 @@
 
 🌙 φεγγάρι - The Lua VM written in JS ES6 for Node and the browser, optimized for low GC pauses and zero-copy host interop.
 
-This repository contains the core fengari code (which is a port of the Lua C library) which includes parser, virtual machine and base libraries.
-However it is rare to use this repository directly.
+## Installation & Usage
 
-- To use fengari in a web browser as easily as you might use JavaScript, see [fengari-web](https://github.com/fengari-lua/fengari-web)
-- [fengari-interop](https://github.com/fengari-lua/fengari-interop) is a lua library that makes interoperating with JavaScript objects simple, it is already included in fengari-web.
-- For a clone of the `lua` command line tool, but running under node.js, see [fengari-node-cli](https://github.com/fengari-lua/fengari-node-cli)
+### 1. Direct Web Browser Use (Drop-in `<script>` Tag)
+
+Pre-built web bundles are available from [GitHub Releases](https://github.com/1Jamie/shaped-fengari/releases) or via CDN (jsDelivr / unpkg):
+
+```html
+<!-- Load the minified browser bundle -->
+<script src="https://cdn.jsdelivr.net/npm/shaped-fengari/dist/shaped-fengari.min.js"></script>
+
+<script>
+  // Exposes global `fengari` (or `window.fengari`)
+  const { lua, lauxlib, lualib, to_luastring, to_jsstring } = window.fengari;
+
+  const L = lauxlib.luaL_newstate();
+  lualib.luaL_openlibs(L);
+
+  lauxlib.luaL_dostring(L, to_luastring("return 'Hello from shaped-fengari!'"));
+  console.log(lua.lua_tojsstring(L, -1)); // "Hello from shaped-fengari!"
+</script>
+```
+
+### 2. ES Modules / Bundlers (Vite, Webpack, Rollup)
+
+Install from npm:
+```bash
+npm install shaped-fengari
+```
+
+Import named or default exports:
+```js
+import fengari, { lua, lauxlib, lualib, to_luastring } from 'shaped-fengari';
+
+const L = lauxlib.luaL_newstate();
+lualib.luaL_openlibs(L);
+lauxlib.luaL_dostring(L, to_luastring("return 21 * 2"));
+console.log(lua.lua_tointeger(L, -1)); // 42
+```
+
+### 3. Node.js
+
+```js
+const fengari = require('shaped-fengari');
+const L = fengari.lauxlib.luaL_newstate();
+fengari.lualib.luaL_openlibs(L);
+```
+
+### 4. Building from Source
+
+To compile the standalone browser bundles, ESM distribution, and CommonJS builds:
+
+```bash
+npm install
+npm run build
+```
+
+This populates the `dist/` directory with:
+* `shaped-fengari.min.js`: Production-ready, minified standalone browser bundle (~225 KB) with sourcemap
+* `shaped-fengari.js`: Unminified browser bundle with sourcemap
+* `shaped-fengari.mjs` & `shaped-fengari.min.mjs`: ES Module builds for bundlers & `<script type="module">`
+* `shaped-fengari.cjs`: Node CommonJS build
+* `fengari.min.js` & `fengari.js`: Drop-in replacement aliases for upstream Fengari
+
+---
 
 ### The JS API
 

@@ -1,6 +1,6 @@
 "use strict";
 
-const conf = (process.env.FENGARICONF ? JSON.parse(process.env.FENGARICONF) : {});
+const conf = (typeof process !== "undefined" && process.env && process.env.FENGARICONF ? JSON.parse(process.env.FENGARICONF) : {});
 
 const {
     LUA_VERSION_MAJOR,

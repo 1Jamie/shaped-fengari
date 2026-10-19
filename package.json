@@ -2,14 +2,39 @@
   "name": "shaped-fengari",
   "version": "0.1.5",
   "description": "A high-performance, low-GC Lua 5.3 VM in JS ES6 for real-time web applications and games",
-  "main": "src/fengari.js",
+  "main": "dist/shaped-fengari.cjs",
+  "module": "dist/shaped-fengari.mjs",
+  "browser": "dist/shaped-fengari.js",
+  "unpkg": "dist/shaped-fengari.min.js",
+  "jsdelivr": "dist/shaped-fengari.min.js",
+  "exports": {
+    ".": {
+      "browser": {
+        "import": "./dist/shaped-fengari.mjs",
+        "default": "./dist/shaped-fengari.js"
+      },
+      "import": "./dist/shaped-fengari.mjs",
+      "require": "./dist/shaped-fengari.cjs",
+      "default": "./dist/shaped-fengari.js"
+    },
+    "./web": "./dist/shaped-fengari.js",
+    "./*": "./*"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
   "directories": {
     "lib": "src",
     "test": "test"
   },
   "scripts": {
     "bench": "node --expose-gc bench/run.js",
-    "lint": "eslint src/ test/",
+    "build": "node scripts/build.js",
+    "lint": "eslint src/ test/ scripts/",
+    "prepack": "npm run build",
     "prepublishOnly": "git diff-index --quiet --cached HEAD -- && npm run lint && npm run test",
     "test": "jest"
   },
@@ -36,6 +61,7 @@
   "homepage": "https://github.com/1Jamie/shaped-fengari#readme",
   "devDependencies": {
     "base-fengari": "npm:fengari@^0.1.5",
+    "esbuild": "^0.28.2",
     "eslint": "^9.39.2",
     "jest": "^30.2.0",
     "wasmoon": "^1.16.0"
