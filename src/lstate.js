@@ -107,8 +107,8 @@ class StackSoA extends Array {
         let tv = this[slot];
         const tag = this.tags[slot];
         const val = (tag === LUA_TNUMINT) ? this.valsI64[slot] :
-                    (tag === LUA_TNUMFLT) ? this.valsF64[slot] :
-                    (tag === LUA_TNIL ? null :
+            (tag === LUA_TNUMFLT) ? this.valsF64[slot] :
+                (tag === LUA_TNIL ? null :
                     (tag === LUA_TBOOLEAN ? (this.valsF64[slot] !== 0) : this.refs[slot]));
         if (!tv) {
             tv = this[slot] = new lobject.TValue(tag, val);
@@ -128,8 +128,8 @@ class StackSoA extends Array {
             const tag = this.tags[dstSlot];
             dst.type = tag;
             dst.value = (tag === LUA_TNUMINT) ? this.valsI64[dstSlot] :
-                        (tag === LUA_TNUMFLT) ? this.valsF64[dstSlot] :
-                        (tag === LUA_TNIL ? null :
+                (tag === LUA_TNUMFLT) ? this.valsF64[dstSlot] :
+                    (tag === LUA_TNIL ? null :
                         (tag === LUA_TBOOLEAN ? (this.valsF64[dstSlot] !== 0) : this.refs[dstSlot]));
         }
     }

@@ -15,17 +15,14 @@ const {
     lua_pushvalue,
     lua_setfield,
     lua_settop,
-    lua_tointeger,
     lua_tointeger64,
     lua_tointeger64x,
-    lua_tointegerx,
     lua_type
 } = require('./lua.js');
 const {
     luaL_argcheck,
     luaL_argerror,
     luaL_checkany,
-    luaL_checkinteger,
     luaL_checkinteger64,
     luaL_checknumber,
     luaL_error,

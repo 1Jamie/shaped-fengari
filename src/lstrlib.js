@@ -40,7 +40,6 @@ const {
     lua_setmetatable,
     lua_settop,
     lua_toboolean,
-    lua_tointeger,
     lua_tointeger64,
     lua_tonumber,
     lua_tostring,
@@ -475,12 +474,6 @@ const LUAL_PACKPADBYTE = 0x00;
 const MAXINTSIZE = 16;
 
 const SZINT = 8; // Size of lua_Integer (64-bit int64_t)
-
-/* number of bits in a character */
-const NB = 8;
-
-/* mask for one character (NB 1's) */
-const MC = ((1 << NB) - 1);
 
 const MAXALIGN = 8;
 

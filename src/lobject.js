@@ -63,7 +63,6 @@ const {
 } = require('./luaconf.js');
 const lvm     = require('./lvm.js');
 const {
-    MAX_INT,
     luai_nummod,
     lua_assert
 } = require("./llimits.js");

@@ -485,8 +485,8 @@ const luaH_getint_to_stack = function(t, key, stack, dstSlot) {
         if (tv) {
             tv.type = tag;
             tv.value = (tag === LUA_TNUMINT) ? t.arrValsI64[idx] :
-                       (tag === LUA_TNUMFLT) ? t.arrValsF64[idx] :
-                       (tag === LUA_TNIL ? null : (tag === LUA_TBOOLEAN ? (t.arrValsF64[idx] !== 0) : t.arrRefs[idx]));
+                (tag === LUA_TNUMFLT) ? t.arrValsF64[idx] :
+                    (tag === LUA_TNIL ? null : (tag === LUA_TBOOLEAN ? (t.arrValsF64[idx] !== 0) : t.arrRefs[idx]));
         }
         return true;
     }
@@ -621,8 +621,8 @@ const luaH_getint = function(t, key) {
         const tag = t.arrTags[idx];
         if (tag === LUA_TNIL) return lobject.luaO_nilobject;
         let val = (tag === LUA_TNUMINT) ? t.arrValsI64[idx] :
-                  (tag === LUA_TNUMFLT) ? t.arrValsF64[idx] :
-                  (tag === LUA_TNIL ? null : (tag === LUA_TBOOLEAN ? (t.arrValsF64[idx] !== 0) : t.arrRefs[idx]));
+            (tag === LUA_TNUMFLT) ? t.arrValsF64[idx] :
+                (tag === LUA_TNIL ? null : (tag === LUA_TBOOLEAN ? (t.arrValsF64[idx] !== 0) : t.arrRefs[idx]));
         return new lobject.TValue(tag, val);
     }
     let biKey = typeof key === "bigint" ? key : BigInt(key);
