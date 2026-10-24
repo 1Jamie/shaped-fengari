@@ -251,7 +251,7 @@ test('string.pack/unpack/packsize', () => {
         lua.lua_call(L, 0, -1);
     }
 
-    expect(lua.lua_tointeger(L, -2)).toBe(12);
+    expect(lua.lua_tointeger(L, -2)).toBe(16);
     expect(lua.lua_toboolean(L, -1)).toBe(true);
 });
 

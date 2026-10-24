@@ -462,7 +462,7 @@ const addk = function(fs, key, v) {
     let f = fs.f;
     let idx = ltable.luaH_get(fs.L, fs.ls.h, key);  /* index scanner table */
     if (idx.ttisinteger()) {  /* is there an index there? */
-        let k = idx.value;
+        let k = Number(idx.value);
         /* correct value? (warning: must distinguish floats from integers!) */
         if (k < fs.nk && f.k[k].ttype() === v.ttype() && f.k[k].value === v.value)
             return k;  /* reuse index */
@@ -974,7 +974,7 @@ const validop = function(op, v1, v2) {
             return (lvm.tointeger(v1) !== false && lvm.tointeger(v2) !== false);
         }
         case LUA_OPDIV: case LUA_OPIDIV: case LUA_OPMOD:  /* division by 0 */
-            return (v2.value !== 0);
+            return (v2.value != 0);
         default: return 1;  /* everything else is valid */
     }
 };

@@ -37,12 +37,14 @@ const {
     luaL_argcheck,
     luaL_buffinit,
     luaL_checkinteger,
+    luaL_checkinteger64,
     luaL_checktype,
     luaL_error,
     luaL_len,
     luaL_newlib,
     luaL_opt,
     luaL_optinteger,
+    luaL_optinteger64,
     luaL_optlstring,
     luaL_pushresult,
     luaL_typename
@@ -143,24 +145,24 @@ const tremove = function(L) {
 ** than origin, or copying to another table.
 */
 const tmove = function(L) {
-    let f = luaL_checkinteger(L, 2);
-    let e = luaL_checkinteger(L, 3);
-    let t = luaL_checkinteger(L, 4);
+    let f = luaL_checkinteger64(L, 2);
+    let e = luaL_checkinteger64(L, 3);
+    let t = luaL_checkinteger64(L, 4);
     let tt = !lua_isnoneornil(L, 5) ? 5 : 1;  /* destination table */
     checktab(L, 1, TAB_R);
     checktab(L, tt, TAB_W);
     if (e >= f) {  /* otherwise, nothing to move */
-        luaL_argcheck(L, f > 0 || e < LUA_MAXINTEGER + f, 3, "too many elements to move");
-        let n = e - f + 1;  /* number of elements to move */
-        luaL_argcheck(L, t <= LUA_MAXINTEGER - n + 1, 4, "destination wrap around");
+        luaL_argcheck(L, f > 0n || e < LUA_MAXINTEGER + f, 3, "too many elements to move");
+        let n = e - f + 1n;  /* number of elements to move */
+        luaL_argcheck(L, t <= LUA_MAXINTEGER - n + 1n, 4, "destination wrap around");
 
         if (t > e || t <= f || (tt !== 1 && lua_compare(L, 1, tt, LUA_OPEQ) !== 1)) {
-            for (let i = 0; i < n; i++) {
+            for (let i = 0n; i < n; i++) {
                 lua_geti(L, 1, f + i);
                 lua_seti(L, tt, t + i);
             }
         } else {
-            for (let i = n - 1; i >= 0; i--) {
+            for (let i = n - 1n; i >= 0n; i--) {
                 lua_geti(L, 1, f + i);
                 lua_seti(L, tt, t + i);
             }
@@ -175,8 +177,8 @@ const tconcat = function(L) {
     let last = aux_getn(L, 1, TAB_R);
     let sep = luaL_optlstring(L, 2, "");
     let lsep = sep.length;
-    let i = luaL_optinteger(L, 3, 1);
-    last = luaL_optinteger(L, 4, last);
+    let i = luaL_optinteger64(L, 3, 1n);
+    last = luaL_optinteger64(L, 4, BigInt(last));
 
     let b = new luaL_Buffer();
     luaL_buffinit(L, b);
@@ -206,16 +208,16 @@ const pack = function(L) {
 };
 
 const unpack = function(L) {
-    let i = luaL_optinteger(L, 2, 1);
-    let e = luaL_opt(L, luaL_checkinteger, 3, luaL_len(L, 1));
+    let i = luaL_optinteger64(L, 2, 1n);
+    let e = luaL_opt(L, luaL_checkinteger64, 3, BigInt(luaL_len(L, 1)));
     if (i > e) return 0;  /* empty range */
     let n = e - i;  /* number of elements minus 1 (avoid overflows) */
-    if (n >= Number.MAX_SAFE_INTEGER || !lua_checkstack(L, ++n))
+    if (n >= BigInt(Number.MAX_SAFE_INTEGER) || !lua_checkstack(L, Number(++n)))
         return luaL_error(L, to_luastring("too many results to unpack"));
     for (; i < e; i++)  /* push arg[i..e - 1] (to avoid overflows) */
         lua_geti(L, 1, i);
     lua_geti(L, 1, e);  /* push last element */
-    return n;
+    return Number(n);
 };
 
 const l_randomizePivot = function() {
@@ -335,7 +337,7 @@ const auxsort = function(L, lo, up, rnd) {
 const sort = function(L) {
     let n = aux_getn(L, 1, TAB_RW);
     if (n > 1) {  /* non-trivial interval? */
-        luaL_argcheck(L, n < LUA_MAXINTEGER, 1, "array too big");
+        luaL_argcheck(L, BigInt(n) < LUA_MAXINTEGER, 1, "array too big");
         if (!lua_isnoneornil(L, 2))  /* is there a 2nd argument? */
             luaL_checktype(L, 2, LUA_TFUNCTION);  /* must be a function */
         lua_settop(L, 2);  /* make sure there are two arguments */

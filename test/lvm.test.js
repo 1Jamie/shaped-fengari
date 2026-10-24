@@ -55,7 +55,7 @@ test('Binary op', () => {
     }
 
     expect(L.stack.slice(L.top - 12, L.top).map(e => e.value))
-        .toEqual([15, -5, 50, 0.5, 5, 9765625.0, 0, 0, 15, 15, 5120, 0]);
+        .toEqual([15n, -5n, 50n, 0.5, 5n, 9765625.0, 0n, 0n, 15n, 15n, 5120n, 0n]);
 });
 
 
@@ -74,7 +74,7 @@ test('Unary op, LOADBOOL', () => {
     }
 
     expect(L.stack.slice(L.top - 3, L.top).map(e => e.value))
-        .toEqual([-5, true, -6]);
+        .toEqual([-5n, true, -6n]);
 });
 
 
@@ -140,7 +140,7 @@ test('Multiple return', () => {
     }
 
     expect(L.stack.slice(L.top - 3, L.top).map(e => e.value))
-        .toEqual([3, -1, 2]);
+        .toEqual([3n, -1n, 2n]);
 });
 
 
@@ -181,7 +181,7 @@ test('VARARG', () => {
     }
 
     expect(L.stack.slice(L.top - 3, L.top).map(e => e.value))
-        .toEqual([1, 2, 3]);
+        .toEqual([1n, 2n, 3n]);
 });
 
 
@@ -477,7 +477,7 @@ test('SETLIST', () => {
     }
 
     expect([...lua.lua_topointer(L, -1).strong.entries()].map(e => e[1].value.value).reverse())
-        .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        .toEqual([1n, 2n, 3n, 4n, 5n, 6n, 7n, 8n, 9n]);
 });
 
 
@@ -500,7 +500,7 @@ test('Variable SETLIST', () => {
     }
 
     expect([...lua.lua_topointer(L, -1).strong.entries()].map(e => e[1].value.value).reverse())
-        .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        .toEqual([1n, 2n, 3n, 4n, 5n, 6n, 7n, 8n, 9n]);
 });
 
 
@@ -519,7 +519,7 @@ test('Long SETLIST', () => {
     }
 
     expect([...lua.lua_topointer(L, -1).strong.entries()].map(e => e[1].value.value).reverse())
-        .toEqual([1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5]);
+        .toEqual([1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5].map(x => BigInt(x)));
 });
 
 

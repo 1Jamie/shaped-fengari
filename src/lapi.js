@@ -69,7 +69,7 @@ const fengari_argcheck = function(c) {
 };
 
 const fengari_argcheckinteger = function(n) {
-    fengari_argcheck(typeof n === "number" && (n|0) === n);
+    fengari_argcheck(typeof n === "bigint" || (typeof n === "number" && Number.isSafeInteger(n)));
 };
 
 const isvalid = function(o) {
@@ -284,11 +284,14 @@ const lua_pushnumber = function(L, n) {
 
 const lua_pushinteger = function(L, n) {
     fengari_argcheckinteger(n);
+    const bi = typeof n === "bigint" ? n : BigInt(n);
     let slot = L.stack[L.top];
-    if (!slot || slot === lobject.luaO_nilobject) L.stack[L.top] = lobject.luaO_acquire(L, LUA_TNUMINT, n);
-    else slot.setivalue(n);
+    if (!slot || slot === lobject.luaO_nilobject) L.stack[L.top] = lobject.luaO_acquire(L, LUA_TNUMINT, bi);
+    else slot.setivalue(bi);
     api_incr_top(L);
 };
+
+const lua_pushinteger64 = lua_pushinteger;
 
 const lua_pushlstring = function(L, s, len) {
     fengari_argcheckinteger(len);
@@ -467,7 +470,11 @@ const lua_seti = function(L, idx, n) {
     fengari_argcheckinteger(n);
     api_checknelems(L, 1);
     let t = index2addr(L, idx);
-    L.stack[L.top] = new TValue(LUA_TNUMINT, n);
+    let bi = typeof n === "bigint" ? n : BigInt(n);
+    let slot = L.stack[L.top];
+    if (!slot || slot === lobject.luaO_nilobject) L.stack[L.top] = lobject.luaO_acquire(L, LUA_TNUMINT, bi);
+    else slot.setivalue(bi);
+    if (L.stack.setInteger) L.stack.setInteger(L.top, bi);
     api_incr_top(L);
     let key = (L.stack && L.stack.getTValue) ? L.stack.getTValue(L.top - 1) : L.stack[L.top - 1];
     let val = (L.stack && L.stack.getTValue) ? L.stack.getTValue(L.top - 2) : L.stack[L.top - 2];
@@ -670,7 +677,11 @@ const lua_getfield = function(L, idx, k) {
 const lua_geti = function(L, idx, n) {
     let t = index2addr(L, idx);
     fengari_argcheckinteger(n);
-    L.stack[L.top] = new TValue(LUA_TNUMINT, n);
+    let bi = typeof n === "bigint" ? n : BigInt(n);
+    let slot = L.stack[L.top];
+    if (!slot || slot === lobject.luaO_nilobject) L.stack[L.top] = lobject.luaO_acquire(L, LUA_TNUMINT, bi);
+    else slot.setivalue(bi);
+    if (L.stack.setInteger) L.stack.setInteger(L.top, bi);
     api_incr_top(L);
     lvm.luaV_gettable(L, t, L.stack[L.top - 1], L.top - 1);
     return L.stack[L.top - 1].ttnov();
@@ -760,12 +771,23 @@ const lua_tocfunction = function(L, idx) {
 };
 
 const lua_tointeger = function(L, idx) {
-    let n = lua_tointegerx(L, idx);
-    return n === false ? 0 : n;
+    let n = lua_tointeger64x(L, idx);
+    return n === false ? 0 : Number(n);
 };
 
 const lua_tointegerx = function(L, idx) {
-    return lvm.tointeger(index2addr(L, idx));
+    let n = lua_tointeger64x(L, idx);
+    return n === false ? false : Number(n);
+};
+
+const lua_tointeger64 = function(L, idx) {
+    let n = lua_tointeger64x(L, idx);
+    return n === false ? 0n : n;
+};
+
+const lua_tointeger64x = function(L, idx) {
+    let res = lvm.tointeger(index2addr(L, idx));
+    return res === false ? false : (typeof res === "bigint" ? res : BigInt(res));
 };
 
 const lua_tonumber = function(L, idx) {
@@ -1226,6 +1248,7 @@ module.exports.lua_pushcfunction     = lua_pushcfunction;
 module.exports.lua_pushfstring       = lua_pushfstring;
 module.exports.lua_pushglobaltable   = lua_pushglobaltable;
 module.exports.lua_pushinteger       = lua_pushinteger;
+module.exports.lua_pushinteger64     = lua_pushinteger64;
 module.exports.lua_pushjsclosure     = lua_pushjsclosure;
 module.exports.lua_pushjsfunction    = lua_pushjsfunction;
 module.exports.lua_pushlightuserdata = lua_pushlightuserdata;
@@ -1264,6 +1287,8 @@ module.exports.lua_toboolean         = lua_toboolean;
 module.exports.lua_tocfunction       = lua_tocfunction;
 module.exports.lua_todataview        = lua_todataview;
 module.exports.lua_tointeger         = lua_tointeger;
+module.exports.lua_tointeger64       = lua_tointeger64;
+module.exports.lua_tointeger64x      = lua_tointeger64x;
 module.exports.lua_tointegerx        = lua_tointegerx;
 module.exports.lua_tojsstring        = lua_tojsstring;
 module.exports.lua_tolstring         = lua_tolstring;

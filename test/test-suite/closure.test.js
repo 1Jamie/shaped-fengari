@@ -244,3 +244,45 @@ test("[test-suite] closure: test for correctly closing upvalues in tail calls of
         throw new SyntaxError(lua.lua_tojsstring(L, -1));
     lua.lua_call(L, 0, 0);
 });
+
+test("[test-suite] closure: upvalues capturing stack values modified by arithmetic operations (typed-array sync)", () => {
+    let L = lauxlib.luaL_newstate();
+    if (!L) throw Error("failed to create lua state");
+
+    let luaCode = `
+        local function test_before_closure()
+            local tabRight = 0
+            tabRight = tabRight + 936
+            local function inner()
+                return tabRight
+            end
+            return inner()
+        end
+        assert(test_before_closure() == 936)
+
+        local function test_open_upval_after_closure()
+            local x = 10
+            local function inner()
+                return x
+            end
+            x = x + 50
+            return inner()
+        end
+        assert(test_open_upval_after_closure() == 60)
+
+        local function test_closed_upval_after_closure()
+            local x = 100
+            local function inner()
+                return x
+            end
+            x = x - 25
+            return inner
+        end
+        local f = test_closed_upval_after_closure()
+        assert(f() == 75)
+    `;
+    lualib.luaL_openlibs(L);
+    if (lauxlib.luaL_loadstring(L, to_luastring(luaCode)) === lua.LUA_ERRSYNTAX)
+        throw new SyntaxError(lua.lua_tojsstring(L, -1));
+    lua.lua_call(L, 0, 0);
+});

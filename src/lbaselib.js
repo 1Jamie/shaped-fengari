@@ -57,6 +57,7 @@ const {
     luaL_argcheck,
     luaL_checkany,
     luaL_checkinteger,
+    luaL_checkinteger64,
     luaL_checkoption,
     luaL_checkstack,
     luaL_checktype,
@@ -246,7 +247,7 @@ const luaB_pairs = function(L) {
 ** Traversal function for 'ipairs'
 */
 const ipairsaux = function(L) {
-    let i = luaL_checkinteger(L, 2) + 1;
+    let i = luaL_checkinteger64(L, 2) + 1n;
     lua_pushinteger(L, i);
     return lua_geti(L, 1, i) === LUA_TNIL ? 1 : 2;
 };
@@ -272,11 +273,28 @@ const b_str2int = function(s, base) {
     } catch (e) {
         return null;
     }
-    let r = /^[\t\v\f \n\r]*([+-]?)0*([0-9A-Za-z]+)[\t\v\f \n\r]*$/.exec(s);
+    let r = /^[\t\v\f \n\r]*([+-]?)([0-9A-Za-z]+)[\t\v\f \n\r]*$/.exec(s);
     if (!r) return null;
-    let v = parseInt(r[1]+r[2], base);
-    if (isNaN(v)) return null;
-    return v|0;
+    let sign = r[1] === '-' ? -1n : 1n;
+    let digits = r[2];
+    let baseBI = BigInt(base);
+    let n = 0n;
+    for (let i = 0; i < digits.length; i++) {
+        let c = digits.charCodeAt(i);
+        let d;
+        if (c >= 48 && c <= 57) { // '0'-'9'
+            d = c - 48;
+        } else if (c >= 65 && c <= 90) { // 'A'-'Z'
+            d = c - 55;
+        } else if (c >= 97 && c <= 122) { // 'a'-'z'
+            d = c - 87;
+        } else {
+            return null;
+        }
+        if (d >= base) return null;
+        n = BigInt.asUintN(64, n * baseBI + BigInt(d));
+    }
+    return BigInt.asIntN(64, sign === -1n ? -n : n);
 };
 
 const luaB_tonumber = function(L) {

@@ -66,6 +66,8 @@ const {
     lua_settop,
     lua_toboolean,
     lua_tointeger,
+    lua_tointeger64,
+    lua_tointeger64x,
     lua_tointegerx,
     lua_tojsstring,
     lua_tolstring,
@@ -455,6 +457,17 @@ const luaL_optinteger = function(L, arg, def) {
     return luaL_opt(L, luaL_checkinteger, arg, def);
 };
 
+const luaL_checkinteger64 = function(L, arg) {
+    let d = lua_tointeger64x(L, arg);
+    if (d === false)
+        interror(L, arg);
+    return d;
+};
+
+const luaL_optinteger64 = function(L, arg, def) {
+    return luaL_opt(L, luaL_checkinteger64, arg, def);
+};
+
 const luaL_prepbuffsize = function(B, sz) {
     let newend = B.n + sz;
     if (B.b.length < newend) {
@@ -593,7 +606,7 @@ const luaL_tolstring = function(L, idx) {
         switch(t) {
             case LUA_TNUMBER: {
                 if (lua_isinteger(L, idx))
-                    lua_pushfstring(L, p_I, lua_tointeger(L, idx));
+                    lua_pushfstring(L, p_I, lua_tointeger64(L, idx));
                 else
                     lua_pushfstring(L, p_f, lua_tonumber(L, idx));
                 break;
@@ -1038,6 +1051,7 @@ module.exports.luaL_buffinitsize    = luaL_buffinitsize;
 module.exports.luaL_callmeta        = luaL_callmeta;
 module.exports.luaL_checkany        = luaL_checkany;
 module.exports.luaL_checkinteger    = luaL_checkinteger;
+module.exports.luaL_checkinteger64  = luaL_checkinteger64;
 module.exports.luaL_checklstring    = luaL_checklstring;
 module.exports.luaL_checknumber     = luaL_checknumber;
 module.exports.luaL_checkoption     = luaL_checkoption;
@@ -1068,6 +1082,7 @@ module.exports.luaL_newmetatable    = luaL_newmetatable;
 module.exports.luaL_newstate        = luaL_newstate;
 module.exports.luaL_opt             = luaL_opt;
 module.exports.luaL_optinteger      = luaL_optinteger;
+module.exports.luaL_optinteger64    = luaL_optinteger64;
 module.exports.luaL_optlstring      = luaL_optlstring;
 module.exports.luaL_optnumber       = luaL_optnumber;
 module.exports.luaL_optstring       = luaL_optstring;

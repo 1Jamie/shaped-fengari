@@ -269,13 +269,13 @@ test('select', () => {
     }
 
     expect([...lua.lua_topointer(L, -3).strong.entries()].map(e => e[1].value.value))
-        .toEqual([3]);
+        .toEqual([3n]);
 
     expect([...lua.lua_topointer(L, -2).strong.entries()].map(e => e[1].value.value).sort())
-        .toEqual([2, 3]);
+        .toEqual([2n, 3n]);
 
     expect([...lua.lua_topointer(L, -1).strong.entries()].map(e => e[1].value.value).sort())
-        .toEqual([2, 3]);
+        .toEqual([2n, 3n]);
 });
 
 

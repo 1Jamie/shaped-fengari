@@ -49,11 +49,11 @@ const DumpInt = function(x, D) {
 };
 
 const DumpInteger = function(x, D) {
-    let ab = new ArrayBuffer(4);
+    let ab = new ArrayBuffer(8);
     let dv = new DataView(ab);
-    dv.setInt32(0, x, true);
+    dv.setBigInt64(0, BigInt(x), true);
     let t = new Uint8Array(ab);
-    DumpBlock(t, 4, D);
+    DumpBlock(t, 8, D);
 };
 
 const DumpNumber = function(x, D) {
@@ -173,7 +173,7 @@ const DumpHeader = function(D) {
     DumpByte(4, D); // intSize
     DumpByte(4, D); // size_tSize
     DumpByte(4, D); // instructionSize
-    DumpByte(4, D); // integerSize
+    DumpByte(8, D); // integerSize
     DumpByte(8, D); // numberSize
     DumpInteger(LUAC_INT, D);
     DumpNumber(LUAC_NUM, D);

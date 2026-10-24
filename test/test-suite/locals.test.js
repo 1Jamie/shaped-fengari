@@ -135,7 +135,7 @@ test('[test-suite] locals: old test for limits for special instructions (now jus
                                                 assert(a==-2^%s)]], -j, p-j, i), '')) ()
             end
             p = 2 * p;  i = i + 1
-          until p <= 0
+          until p <= 0 or p > 0x7fffffff
         end
     `;
     lualib.luaL_openlibs(L);

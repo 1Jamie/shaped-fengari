@@ -41,6 +41,7 @@ const {
     lua_settop,
     lua_toboolean,
     lua_tointeger,
+    lua_tointeger64,
     lua_tonumber,
     lua_tostring,
     lua_touserdata,
@@ -59,6 +60,7 @@ const {
     luaL_buffinit,
     luaL_buffinitsize,
     luaL_checkinteger,
+    luaL_checkinteger64,
     luaL_checknumber,
     luaL_checkstack,
     luaL_checkstring,
@@ -264,6 +266,68 @@ const checkdp = function(buff) {
     }
 };
 
+const format_integer = function(fmt, n) {
+    let bi = typeof n === 'bigint' ? n : BigInt(n);
+    let has0x = false;
+    if (fmt.startsWith("0x%")) {
+        has0x = true;
+        fmt = fmt.slice(2);
+    }
+    const m = fmt.match(/^%([-+ #0]*)?([0-9]+)?(?:\.([0-9]+))?(?:ll|l|j|z)?([diouxX])$/);
+    if (!m) return (has0x ? "0x" : "") + String(n);
+    let [, flags, width, prec, spec] = m;
+    flags = flags || '';
+    let isSigned = (spec === 'd' || spec === 'i');
+    let isNeg = false;
+    let base = 10;
+    if (spec === 'x' || spec === 'X') base = 16;
+    else if (spec === 'o') base = 8;
+    let s;
+    if (isSigned) {
+        if (bi < 0n) {
+            isNeg = true;
+            s = (-bi).toString(10);
+        } else {
+            s = bi.toString(10);
+        }
+    } else {
+        let u = BigInt.asUintN(64, bi);
+        s = u.toString(base);
+        if (spec === 'X') s = s.toUpperCase();
+    }
+    if (prec !== undefined) {
+        let p = parseInt(prec, 10);
+        if (p === 0 && bi === 0n) s = '';
+        else while (s.length < p) s = '0' + s;
+    }
+    let prefix = '';
+    if (has0x) {
+        prefix = '0x';
+    } else if (isSigned) {
+        if (isNeg) prefix = '-';
+        else if (flags.includes('+')) prefix = '+';
+        else if (flags.includes(' ')) prefix = ' ';
+    } else if (flags.includes('#') && bi !== 0n) {
+        if (spec === 'x') prefix = '0x';
+        else if (spec === 'X') prefix = '0X';
+        else if (spec === 'o' && !s.startsWith('0')) prefix = '0';
+    }
+    let w = width ? parseInt(width, 10) : 0;
+    let padZero = flags.includes('0') && !flags.includes('-') && prec === undefined;
+    let totalLen = prefix.length + s.length;
+    if (totalLen < w) {
+        let padCount = w - totalLen;
+        if (padZero) {
+            s = '0'.repeat(padCount) + s;
+        } else if (flags.includes('-')) {
+            s = s + ' '.repeat(padCount);
+        } else {
+            prefix = ' '.repeat(padCount) + prefix;
+        }
+    }
+    return prefix + s;
+};
+
 const addliteral = function(L, b, arg) {
     switch(lua_type(L, arg)) {
         case LUA_TSTRING: {
@@ -278,11 +342,11 @@ const addliteral = function(L, b, arg) {
                 buff = lua_number2strx(L, to_luastring(`%${LUA_INTEGER_FRMLEN}a`), n);
                 checkdp(buff);  /* ensure it uses a dot */
             } else {  /* integers */
-                let n = lua_tointeger(L, arg);
+                let n = lua_tointeger64(L, arg);
                 let format = (n === LUA_MININTEGER)  /* corner case? */
                     ? "0x%" + LUA_INTEGER_FRMLEN + "x"  /* use hexa */
                     : LUA_INTEGER_FMT;  /* else use default format */
-                buff = to_luastring(sprintf(format, n));
+                buff = to_luastring(format_integer(format, n));
             }
             luaL_addstring(b, buff);
             break;
@@ -356,9 +420,9 @@ const str_format = function(L) {
                 }
                 case 'd': case 'i':
                 case 'o': case 'u': case 'x': case 'X': {
-                    let n = luaL_checkinteger(L, arg);
+                    let n = luaL_checkinteger64(L, arg);
                     addlenmod(form, to_luastring(LUA_INTEGER_FRMLEN, true));
-                    luaL_addstring(b, to_luastring(sprintf(String.fromCharCode(...form), n)));
+                    luaL_addstring(b, to_luastring(format_integer(String.fromCharCode(...form), n)));
                     break;
                 }
                 case 'a': case 'A': {
@@ -410,7 +474,7 @@ const LUAL_PACKPADBYTE = 0x00;
 /* maximum size for the binary representation of an integer */
 const MAXINTSIZE = 16;
 
-const SZINT = 4; // Size of lua_Integer
+const SZINT = 8; // Size of lua_Integer (64-bit int64_t)
 
 /* number of bits in a character */
 const NB = 8;
@@ -484,8 +548,8 @@ const getoption = function(h, fmt) {
         case 72  /*'H'*/: r.size = 2; r.opt = Kuint;  return r;
         case 108 /*'l'*/: r.size = 4; r.opt = Kint;   return r; // sizeof(long): 4
         case 76  /*'L'*/: r.size = 4; r.opt = Kuint;  return r;
-        case 106 /*'j'*/: r.size = 4; r.opt = Kint;   return r; // sizeof(lua_Integer): 4
-        case 74  /*'J'*/: r.size = 4; r.opt = Kuint;  return r;
+        case 106 /*'j'*/: r.size = 8; r.opt = Kint;   return r; // sizeof(lua_Integer): 8
+        case 74  /*'J'*/: r.size = 8; r.opt = Kuint;  return r;
         case 84  /*'T'*/: r.size = 4; r.opt = Kuint;  return r; // sizeof(size_t): 4
         case 102 /*'f'*/: r.size = 4; r.opt = Kfloat; return r; // sizeof(float): 4
         case 100 /*'d'*/: r.size = 8; r.opt = Kfloat; return r; // sizeof(double): 8
@@ -565,14 +629,15 @@ const getdetails = function(h, totalsize, fmt) {
 */
 const packint = function(b, n, islittle, size, neg) {
     let buff = luaL_prepbuffsize(b, size);
-    buff[islittle ? 0 : size - 1] = n & MC;  /* first byte */
+    let bn = typeof n === "bigint" ? n : BigInt(n);
+    buff[islittle ? 0 : size - 1] = Number(bn & 0xFFn);
     for (let i = 1; i < size; i++) {
-        n >>= NB;
-        buff[islittle ? i : size - 1 - i] = n & MC;
+        bn >>= 8n;
+        buff[islittle ? i : size - 1 - i] = Number(bn & 0xFFn);
     }
     if (neg && size > SZINT) {  /* negative number need sign extension? */
         for (let i = SZINT; i < size; i++)  /* correct extra bytes */
-            buff[islittle ? i : size - 1 - i] = MC;
+            buff[islittle ? i : size - 1 - i] = 0xFF;
     }
     luaL_addsize(b, size);  /* add result to buffer */
 };
@@ -599,19 +664,22 @@ const str_pack = function(L) {
         arg++;
         switch (opt) {
             case Kint: {  /* signed integers */
-                let n = luaL_checkinteger(L, arg);
+                let n = luaL_checkinteger64(L, arg);
                 if (size < SZINT) {  /* need overflow check? */
-                    let lim = 1 << (size * 8) - 1;
+                    let lim = 1n << BigInt(size * 8 - 1);
                     luaL_argcheck(L, -lim <= n && n < lim, arg, "integer overflow");
                 }
-                packint(b, n, h.islittle, size, n < 0);
+                packint(b, n, h.islittle, size, n < 0n);
                 break;
             }
             case Kuint: {  /* unsigned integers */
-                let n = luaL_checkinteger(L, arg);
-                if (size < SZINT)
-                    luaL_argcheck(L, (n>>>0) < (1 << (size * NB)), arg, "unsigned overflow");
-                packint(b, n>>>0, h.islittle, size, false);
+                let n = luaL_checkinteger64(L, arg);
+                let un = BigInt.asUintN(64, n);
+                if (size < SZINT) {
+                    let lim = 1n << BigInt(size * 8);
+                    luaL_argcheck(L, un < lim, arg, "unsigned overflow");
+                }
+                packint(b, un, h.islittle, size, false);
                 break;
             }
             case Kfloat: {  /* floating-point options */
@@ -636,9 +704,9 @@ const str_pack = function(L) {
                 let s = luaL_checkstring(L, arg);
                 let len = s.length;
                 luaL_argcheck(L,
-                    size >= 4 /* sizeof(size_t) */ || len < (1 << (size * NB)),
+                    size >= 4 /* sizeof(size_t) */ || len < (1 << (size * 8)),
                     arg, "string length does not fit in given size");
-                packint(b, len, h.islittle, size, 0);  /* pack length */
+                packint(b, BigInt(len), h.islittle, size, false);  /* pack length */
                 luaL_addlstring(b, s, len);
                 totalsize += len;
                 break;
@@ -783,25 +851,26 @@ const str_packsize = function(L) {
 ** overflow.
 */
 const unpackint = function(L, str, islittle, size, issigned) {
-    let res = 0;
+    let res = 0n;
     let limit = size <= SZINT ? size : SZINT;
     for (let i = limit - 1; i >= 0; i--) {
-        res <<= NB;
-        res |= str[islittle ? i : size - 1 - i];
+        res <<= 8n;
+        res |= BigInt(str[islittle ? i : size - 1 - i]);
     }
     if (size < SZINT) {  /* real size smaller than lua_Integer? */
         if (issigned) {  /* needs sign extension? */
-            let mask = 1 << (size * NB - 1);
+            let mask = 1n << BigInt(size * 8 - 1);
             res = ((res ^ mask) - mask);  /* do sign extension */
         }
     } else if (size > SZINT) {  /* must check unread bytes */
-        let mask = !issigned || res >= 0 ? 0 : MC;
+        let sres = BigInt.asIntN(64, res);
+        let mask = (!issigned || sres >= 0n) ? 0 : 0xFF;
         for (let i = limit; i < size; i++) {
             if (str[islittle ? i : size - 1 - i] !== mask)
                 luaL_error(L, to_luastring("%d-byte integer does not fit into Lua Integer"), size);
         }
     }
-    return res;
+    return BigInt.asIntN(64, res);
 };
 
 const unpacknum = function(L, b, islittle, size) {
@@ -854,7 +923,7 @@ const str_unpack = function(L) {
                 break;
             }
             case Kstring: {
-                let len = unpackint(L, data.subarray(pos), h.islittle, size, 0);
+                let len = Number(unpackint(L, data.subarray(pos), h.islittle, size, false));
                 luaL_argcheck(L, pos + len + size <= ld, 2, "data string too short");
                 lua_pushstring(L, data.subarray(pos + size, pos + size + len));
                 pos += len;  /* skip string */

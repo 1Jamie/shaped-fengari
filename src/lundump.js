@@ -48,7 +48,7 @@ class BytecodeParser {
         this.intSize = 4;
         this.size_tSize = 4;
         this.instructionSize = 4;
-        this.integerSize = 4;
+        this.integerSize = 8;
         this.numberSize = 8;
 
         lua_assert(Z instanceof ZIO, "BytecodeParser only operates on a ZIO");
@@ -100,11 +100,11 @@ class BytecodeParser {
     LoadInteger() {
         if (luaZ_read(this.Z, this.u8, 0, this.integerSize) !== 0)
             this.error("truncated");
-        return this.dv.getInt32(0, true);
+        return this.dv.getBigInt64(0, true);
     }
 
     LoadSize_t() {
-        return this.LoadInteger();
+        return Number(this.LoadInteger());
     }
 
     LoadString() {
@@ -254,10 +254,10 @@ class BytecodeParser {
         this.checksize(this.intSize, 4, "int");
         this.checksize(this.size_tSize, 4, "size_t");
         this.checksize(this.instructionSize, 4, "instruction");
-        this.checksize(this.integerSize, 4, "integer");
+        this.checksize(this.integerSize, 8, "integer");
         this.checksize(this.numberSize, 8, "number");
 
-        if (this.LoadInteger() !== 0x5678)
+        if (this.LoadInteger() !== 0x5678n)
             this.error("endianness mismatch in");
 
         if (this.LoadNumber() !== 370.5)

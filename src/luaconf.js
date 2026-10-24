@@ -128,8 +128,11 @@ if (typeof process === "undefined") {
 */
 const LUA_COMPAT_FLOATSTRING = conf.LUA_COMPAT_FLOATSTRING || false;
 
-const LUA_MAXINTEGER = 2147483647;
-const LUA_MININTEGER = -2147483648;
+const LUA_MAXINTEGER = 9223372036854775807n;
+const LUA_MININTEGER = -9223372036854775808n;
+
+const MIN_INT_FLT = -9223372036854775808.0; // -2^63 (exact in float64)
+const MAX_INT_FLT =  9223372036854775808.0; // +2^63 (exact in float64, EXCLUDED!)
 
 /*
 @@ LUAI_MAXSTACK limits the size of the Lua stack.
@@ -155,7 +158,13 @@ const lua_number2str = function(n) {
 };
 
 const lua_numbertointeger = function(n) {
-    return n >= LUA_MININTEGER && n < -LUA_MININTEGER ? n : false;
+    if (typeof n === "bigint") {
+        return (n >= LUA_MININTEGER && n <= LUA_MAXINTEGER) ? n : false;
+    }
+    if (typeof n === "number" && n >= MIN_INT_FLT && n < MAX_INT_FLT && Number.isInteger(n)) {
+        return BigInt(n);
+    }
+    return false;
 };
 
 const LUA_INTEGER_FRMLEN = "";
@@ -207,6 +216,8 @@ module.exports.LUA_INTEGER_FMT        = LUA_INTEGER_FMT;
 module.exports.LUA_INTEGER_FRMLEN     = LUA_INTEGER_FRMLEN;
 module.exports.LUA_MAXINTEGER         = LUA_MAXINTEGER;
 module.exports.LUA_MININTEGER         = LUA_MININTEGER;
+module.exports.MIN_INT_FLT            = MIN_INT_FLT;
+module.exports.MAX_INT_FLT            = MAX_INT_FLT;
 module.exports.LUA_NUMBER_FMT         = LUA_NUMBER_FMT;
 module.exports.LUA_NUMBER_FRMLEN      = LUA_NUMBER_FRMLEN;
 module.exports.LUAL_BUFFERSIZE        = LUAL_BUFFERSIZE;

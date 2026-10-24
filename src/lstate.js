@@ -43,6 +43,7 @@ class StackSoA extends Array {
 
         this.tags = new Uint8Array(this.buffer, 0, capacity);
         this.valsF64 = new Float64Array(this.buffer, tagBytes, capacity);
+        this.valsI64 = new BigInt64Array(this.buffer, tagBytes, capacity);
         this.refs = new Array(capacity).fill(null);
     }
 
@@ -59,23 +60,24 @@ class StackSoA extends Array {
 
     setInteger(slot, val) {
         this.tags[slot] = LUA_TNUMINT;
-        this.valsF64[slot] = val;
+        const bVal = typeof val === "bigint" ? val : BigInt(val);
+        this.valsI64[slot] = bVal;
         this.refs[slot] = null;
         let tv = this[slot];
         if (tv) {
             tv.type = LUA_TNUMINT;
-            tv.value = val;
+            tv.value = bVal;
         }
     }
 
     setObject(slot, tag, obj) {
         this.tags[slot] = tag;
-        this.valsF64[slot] = 0;
+        this.valsF64[slot] = (tag === LUA_TBOOLEAN && obj) ? 1 : 0;
         this.refs[slot] = obj;
         let tv = this[slot];
         if (tv) {
             tv.type = tag;
-            tv.value = obj;
+            tv.value = (tag === LUA_TBOOLEAN) ? (obj ? true : false) : obj;
         }
     }
 
@@ -104,7 +106,10 @@ class StackSoA extends Array {
     getTValue(slot) {
         let tv = this[slot];
         const tag = this.tags[slot];
-        const val = (tag === LUA_TNUMINT || tag === LUA_TNUMFLT) ? this.valsF64[slot] : (tag === LUA_TNIL ? null : (tag === LUA_TBOOLEAN ? (this.valsF64[slot] !== 0) : this.refs[slot]));
+        const val = (tag === LUA_TNUMINT) ? this.valsI64[slot] :
+                    (tag === LUA_TNUMFLT) ? this.valsF64[slot] :
+                    (tag === LUA_TNIL ? null :
+                    (tag === LUA_TBOOLEAN ? (this.valsF64[slot] !== 0) : this.refs[slot]));
         if (!tv) {
             tv = this[slot] = new lobject.TValue(tag, val);
         } else {
@@ -122,7 +127,10 @@ class StackSoA extends Array {
         if (dst) {
             const tag = this.tags[dstSlot];
             dst.type = tag;
-            dst.value = (tag === LUA_TNUMINT || tag === LUA_TNUMFLT) ? this.valsF64[dstSlot] : (tag === LUA_TNIL ? null : (tag === LUA_TBOOLEAN ? (this.valsF64[dstSlot] !== 0) : this.refs[dstSlot]));
+            dst.value = (tag === LUA_TNUMINT) ? this.valsI64[dstSlot] :
+                        (tag === LUA_TNUMFLT) ? this.valsF64[dstSlot] :
+                        (tag === LUA_TNIL ? null :
+                        (tag === LUA_TBOOLEAN ? (this.valsF64[dstSlot] !== 0) : this.refs[dstSlot]));
         }
     }
 
@@ -133,6 +141,7 @@ class StackSoA extends Array {
         const newBuffer = new ArrayBuffer(newTotalBytes);
         const newTags = new Uint8Array(newBuffer, 0, newCapacity);
         const newValsF64 = new Float64Array(newBuffer, newTagBytes, newCapacity);
+        const newValsI64 = new BigInt64Array(newBuffer, newTagBytes, newCapacity);
 
         newTags.set(this.tags);
         newValsF64.set(this.valsF64);
@@ -143,6 +152,7 @@ class StackSoA extends Array {
         this.buffer = newBuffer;
         this.tags = newTags;
         this.valsF64 = newValsF64;
+        this.valsI64 = newValsI64;
 
         this.refs.length = newCapacity;
         for (let i = oldCapacity; i < newCapacity; i++) {
@@ -155,7 +165,7 @@ class StackSoA extends Array {
         if (!tv) return;
         this.tags[slot] = tv.type;
         if (tv.type === LUA_TNUMINT) {
-            this.valsF64[slot] = tv.value;
+            this.valsI64[slot] = typeof tv.value === "bigint" ? tv.value : BigInt(tv.value);
             this.refs[slot] = null;
         } else if (tv.type === LUA_TNUMFLT) {
             this.valsF64[slot] = tv.value;

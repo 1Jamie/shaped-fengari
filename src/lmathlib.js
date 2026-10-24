@@ -16,6 +16,8 @@ const {
     lua_setfield,
     lua_settop,
     lua_tointeger,
+    lua_tointeger64,
+    lua_tointeger64x,
     lua_tointegerx,
     lua_type
 } = require('./lua.js');
@@ -24,6 +26,7 @@ const {
     luaL_argerror,
     luaL_checkany,
     luaL_checkinteger,
+    luaL_checkinteger64,
     luaL_checknumber,
     luaL_error,
     luaL_newlib,
@@ -57,13 +60,13 @@ const math_random = function(L) {
             lua_pushnumber(L, r);  /* Number between 0 and 1 */
             return 1;
         case 1: {
-            low = 1;
-            up = luaL_checkinteger(L, 1);
+            low = 1n;
+            up = luaL_checkinteger64(L, 1);
             break;
         }
         case 2: {
-            low = luaL_checkinteger(L, 1);
-            up = luaL_checkinteger(L, 2);
+            low = luaL_checkinteger64(L, 1);
+            up = luaL_checkinteger64(L, 2);
             break;
         }
         default: return luaL_error(L, "wrong number of arguments");
@@ -71,11 +74,20 @@ const math_random = function(L) {
 
     /* random integer in the interval [low, up] */
     luaL_argcheck(L, low <= up, 1, "interval is empty");
-    luaL_argcheck(L, low >= 0 || up <= LUA_MAXINTEGER + low, 1,
+    luaL_argcheck(L, low >= 0n || up <= LUA_MAXINTEGER + low, 1,
         "interval too large");
 
-    r *= (up - low) + 1;
-    lua_pushinteger(L, Math.floor(r) + low);
+    let range = up - low + 1n;
+    if (range <= 0x1fffffffffffff) {
+        let fr = Math.floor(r * Number(range));
+        lua_pushinteger(L, low + BigInt(fr));
+    } else {
+        let rLo = BigInt(Math.floor(Math.random() * 0x100000000));
+        let rHi = BigInt(Math.floor(Math.random() * 0x100000000));
+        let r64 = (rHi << 32n) | rLo;
+        let offset = r64 % range;
+        lua_pushinteger(L, low + offset);
+    }
     return 1;
 };
 
@@ -87,8 +99,8 @@ const math_randomseed = function(L) {
 
 const math_abs = function(L) {
     if (lua_isinteger(L, 1)) {
-        let n = lua_tointeger(L, 1);
-        if (n < 0) n = (-n)|0;
+        let n = lua_tointeger64(L, 1);
+        if (n < 0n) n = BigInt.asIntN(64, -n);
         lua_pushinteger(L, n);
     }
     else
@@ -129,7 +141,7 @@ const math_atan = function(L) {
 };
 
 const math_toint = function(L) {
-    let n = lua_tointegerx(L, 1);
+    let n = lua_tointeger64x(L, 1);
     if (n !== false)
         lua_pushinteger(L, n);
     else {
@@ -171,9 +183,11 @@ const math_sqrt = function(L) {
 };
 
 const math_ult = function(L) {
-    let a = luaL_checkinteger(L, 1);
-    let b = luaL_checkinteger(L, 2);
-    lua_pushboolean(L, (a >= 0)?(b<0 || a<b):(b<0 && a<b));
+    let a = luaL_checkinteger64(L, 1);
+    let b = luaL_checkinteger64(L, 2);
+    let ua = BigInt.asUintN(64, a);
+    let ub = BigInt.asUintN(64, b);
+    lua_pushboolean(L, ua < ub);
     return 1;
 };
 
@@ -249,12 +263,17 @@ const math_type = function(L) {
 
 const math_fmod = function(L) {
     if (lua_isinteger(L, 1) && lua_isinteger(L, 2)) {
-        let d = lua_tointeger(L, 2);
-        /* no special case needed for -1 in javascript */
-        if (d === 0) {
+        let d = lua_tointeger64(L, 2);
+        if (d === 0n) {
             luaL_argerror(L, 2, "zero");
-        } else
-            lua_pushinteger(L, (lua_tointeger(L, 1) % d)|0);
+        } else {
+            let m = lua_tointeger64(L, 1);
+            if (m === LUA_MININTEGER && d === -1n) {
+                lua_pushinteger(L, 0n);
+            } else {
+                lua_pushinteger(L, BigInt.asIntN(64, m % d));
+            }
+        }
     } else {
         let a = luaL_checknumber(L, 1);
         let b = luaL_checknumber(L, 2);

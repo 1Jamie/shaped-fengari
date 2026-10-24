@@ -9,7 +9,7 @@ const inttable2array = function(t) {
     let a = [];
     t.strong.forEach(function (v, k) {
         if (v.key.ttisnumber())
-            a[k - 1] = v.value;
+            a[Number(k) - 1] = v.value;
     });
     return a.map(e => e.value);
 };
@@ -47,7 +47,7 @@ test('table.pack', () => {
     expect([...lua.lua_topointer(L, -1).strong.entries()]
         .filter(e => e[1].key.ttisnumber()) // Filter out the 'n' field
         .map(e => e[1].value.value).reverse()
-    ).toEqual([1, 2, 3]);
+    ).toEqual([1n, 2n, 3n]);
 });
 
 
@@ -90,7 +90,7 @@ test('table.insert', () => {
         [...lua.lua_topointer(L, -1).strong.entries()]
             .filter(e => e[1].key.ttisnumber())
             .map(e => e[1].value.value).sort()
-    ).toEqual([1, 2, 3, 4, 5]);
+    ).toEqual([1n, 2n, 3n, 4n, 5n]);
 });
 
 
@@ -114,7 +114,7 @@ test('table.remove', () => {
         [...lua.lua_topointer(L, -1).strong.entries()]
             .filter(e => e[1].key.ttisnumber())
             .map(e => e[1].value.value).sort()
-    ).toEqual([1, 2, 3, 4]);
+    ).toEqual([1n, 2n, 3n, 4n]);
 });
 
 
@@ -137,7 +137,7 @@ test('table.move', () => {
         [...lua.lua_topointer(L, -1).strong.entries()]
             .filter(e => e[1].key.ttisnumber())
             .map(e => e[1].value.value).sort()
-    ).toEqual([1, 2, 3, 4, 5, 6]);
+    ).toEqual([1n, 2n, 3n, 4n, 5n, 6n]);
 });
 
 
@@ -157,7 +157,7 @@ test('table.sort (<)', () => {
     }
 
     expect(inttable2array(lua.lua_topointer(L, -1)))
-        .toEqual([1, 2, 3, 4, 5]);
+        .toEqual([1n, 2n, 3n, 4n, 5n]);
 });
 
 
@@ -179,5 +179,5 @@ test('table.sort with cmp function', () => {
     }
 
     expect(inttable2array(lua.lua_topointer(L, -1)))
-        .toEqual([5, 4, 3, 2, 1]);
+        .toEqual([5n, 4n, 3n, 2n, 1n]);
 });
