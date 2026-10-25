@@ -32,5 +32,6 @@ module.exports.luastring_indexOf       = defs.luastring_indexOf;
 module.exports.luastring_of            = defs.luastring_of;
 module.exports.to_jsstring             = defs.to_jsstring;
 module.exports.to_luastring            = defs.to_luastring;
+module.exports.to_luastring_src_map    = defs.to_luastring_src_map;
 module.exports.to_uristring            = defs.to_uristring;
 module.exports.from_userstring         = defs.from_userstring;

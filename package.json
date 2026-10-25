@@ -1,6 +1,6 @@
 {
   "name": "shaped-fengari",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "A high-performance, low-GC Lua 5.3 VM in JS ES6 for real-time web applications and games",
   "main": "dist/shaped-fengari.cjs",
   "module": "dist/shaped-fengari.mjs",

@@ -175,12 +175,13 @@ const to_uristring = function(a) {
 };
 
 const to_luastring_cache = Object.create(null);
+const to_luastring_src_map = new WeakMap();
 
 const to_luastring = function(str, cache) {
     if (typeof str !== "string") throw new TypeError("to_luastring expects a javascript string");
 
     if (cache === void 0) {
-        cache = (str.length <= 64);
+        cache = (str.length <= 256);
     }
 
     if (cache) {
@@ -222,6 +223,7 @@ const to_luastring = function(str, cache) {
         }
     }
     outU8Array = luastring_from(outU8Array);
+    to_luastring_src_map.set(outU8Array, str);
 
     if (cache) to_luastring_cache[str] = outU8Array;
 
@@ -247,6 +249,7 @@ module.exports.luastring_eq      = luastring_eq;
 module.exports.to_jsstring       = to_jsstring;
 module.exports.to_uristring      = to_uristring;
 module.exports.to_luastring      = to_luastring;
+module.exports.to_luastring_src_map = to_luastring_src_map;
 module.exports.from_userstring   = from_userstring;
 
 

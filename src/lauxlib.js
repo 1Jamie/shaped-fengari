@@ -6,6 +6,7 @@ const {
 const {
     LUA_ERRERR,
     LUA_MULTRET,
+    LUA_OK,
     LUA_REGISTRYINDEX,
     LUA_SIGNATURE,
     LUA_TBOOLEAN,
@@ -83,9 +84,14 @@ const {
 const {
     from_userstring,
     luastring_eq,
+    to_jsstring,
     to_luastring,
+    to_luastring_src_map,
     to_uristring
 } = require("./fengaricore.js");
+const lfunc = require('./lfunc.js');
+const ltable = require('./ltable.js');
+const ldo = require('./ldo.js');
 
 /* extra error code for 'luaL_loadfilex' */
 const LUA_ERRFILE = LUA_ERRERR+1;
@@ -545,8 +551,89 @@ const getS = function(L, ud) {
     return s;
 };
 
+const PROTO_CACHE_MAX = 128;
+
+const get_buffer_cache_key = function(buff, name, mode) {
+    if (!buff) return null;
+    let keyStr = null;
+    if (typeof buff === "string") {
+        keyStr = buff;
+    } else if (buff instanceof Uint8Array) {
+        if (buff.length > 0 && buff[0] === 27 /* LUA_SIGNATURE byte */) {
+            return null;
+        }
+        keyStr = to_luastring_src_map ? to_luastring_src_map.get(buff) : null;
+        if (!keyStr) {
+            try {
+                keyStr = to_jsstring(buff, 0, buff.length, true);
+            } catch (_) {
+                return null;
+            }
+        }
+    }
+    if (!keyStr) return null;
+
+    let nameStr = "";
+    if (name) {
+        if (typeof name === "string") {
+            nameStr = name;
+        } else if (name instanceof Uint8Array) {
+            nameStr = to_luastring_src_map ? to_luastring_src_map.get(name) : null;
+            if (!nameStr) {
+                try {
+                    nameStr = to_jsstring(name, 0, name.length, true);
+                } catch (_) {
+                    nameStr = "";
+                }
+            }
+        }
+    }
+    return (mode || "") + "\0" + nameStr + "\0" + keyStr;
+};
+
 const luaL_loadbufferx = function(L, buff, size, name, mode) {
-    return lua_load(L, getS, {string: buff}, name, mode);
+    const cacheKey = get_buffer_cache_key(buff, name, mode);
+    if (cacheKey && L && L.l_G) {
+        let cache = L.l_G._protoCache;
+        if (cache) {
+            let proto = cache.get(cacheKey);
+            if (proto) {
+                // Move to MRU
+                cache.delete(cacheKey);
+                cache.set(cacheKey, proto);
+
+                let cl = lfunc.luaF_newLclosure(L, proto.upvalues.length);
+                cl.p = proto;
+                ldo.luaD_inctop(L);
+                L.stack[L.top - 1].setclLvalue(cl);
+                if (L.stack.syncFromTValue) L.stack.syncFromTValue(L.top - 1);
+                lfunc.luaF_initupvals(L, cl);
+                if (cl.nupvalues >= 1) {
+                    let gt = L.l_G._globalsTV || ltable.luaH_getint(L.l_G.l_registry.value, LUA_RIDX_GLOBALS);
+                    cl.upvals[0].setfrom(gt);
+                }
+                return LUA_OK;
+            }
+        }
+    }
+
+    let status = lua_load(L, getS, {string: buff}, name, mode);
+    if (status === LUA_OK && cacheKey && L && L.l_G) {
+        let topSlot = (L.stack && L.stack.getTValue) ? L.stack.getTValue(L.top - 1) : L.stack[L.top - 1];
+        let cl = topSlot ? topSlot.value : null;
+        if (cl && cl.p) {
+            let cache = L.l_G._protoCache;
+            if (!cache) {
+                cache = L.l_G._protoCache = new Map();
+            }
+            if (cache.size >= PROTO_CACHE_MAX) {
+                const oldest = cache.keys().next().value;
+                cache.delete(oldest);
+            }
+            cache.set(cacheKey, cl.p);
+        }
+    }
+    return status;
 };
 
 const luaL_loadbuffer = function(L, s, sz, n) {
