@@ -17,6 +17,7 @@ const {
     lua_insert,
     lua_isnil,
     lua_isnoneornil,
+    lua_istable,
     lua_isstring,
     lua_pop,
     lua_pushinteger,
@@ -28,6 +29,7 @@ const {
     lua_seti,
     lua_settop,
     lua_toboolean,
+    lua_topointer,
     lua_type
 } = require('./lua.js');
 const {
@@ -214,6 +216,34 @@ const unpack = function(L) {
     let n = e - i;  /* number of elements minus 1 (avoid overflows) */
     if (n >= BigInt(Number.MAX_SAFE_INTEGER) || !lua_checkstack(L, Number(++n)))
         return luaL_error(L, to_luastring("too many results to unpack"));
+    /* Array slots are already typed. Copy them onto the stack instead of calling lua_geti per index. */
+    let tbl = lua_istable(L, 1) ? lua_topointer(L, 1) : null;
+    if (tbl && tbl.metatable == null && tbl.arrTags && i >= 1n && e <= BigInt(tbl.asize)) {
+        let count = Number(n);
+        let base = L.top;
+        let start = Number(i) - 1;
+        let stack = L.stack.rawStack || L.stack;
+        stack.tags.set(tbl.arrTags.subarray(start, start + count), base);
+        stack.valsF64.set(tbl.arrValsF64.subarray(start, start + count), base);
+        let srcRefs = tbl.arrRefs;
+        let dstRefs = stack.refs;
+        for (let k = 0; k < count; k++) dstRefs[base + k] = srcRefs[start + k];
+        if (stack.views) stack.views.fill(null, base, base + count);
+        L.top = base + count;
+        return count;
+    }
+    if (tbl && tbl.metatable == null && !tbl.f && i > BigInt(tbl.asize)) {
+        let count = Number(n);
+        let base = L.top;
+        let stack = L.stack.rawStack || L.stack;
+        let end = base + count;
+        stack.tags.fill(LUA_TNIL, base, end);
+        stack.valsF64.fill(0, base, end);
+        stack.refs.fill(null, base, end);
+        if (stack.views) stack.views.fill(null, base, end);
+        L.top = end;
+        return count;
+    }
     for (; i < e; i++)  /* push arg[i..e - 1] (to avoid overflows) */
         lua_geti(L, 1, i);
     lua_geti(L, 1, e);  /* push last element */

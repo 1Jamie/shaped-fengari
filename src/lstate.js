@@ -45,73 +45,60 @@ class StackSoA extends Array {
         this.valsF64 = new Float64Array(this.buffer, tagBytes, capacity);
         this.valsI64 = new BigInt64Array(this.buffer, tagBytes, capacity);
         this.refs = new Array(capacity).fill(null);
+        this.views = new Array(capacity);
+        this.rawStack = this;
+    }
+
+    dropView(slot) {
+        /* Drop the cached view without mutating it. CallInfo may still hold it. */
+        this.views[slot] = null;
     }
 
     setNumber(slot, val) {
         this.tags[slot] = LUA_TNUMFLT;
         this.valsF64[slot] = val;
         this.refs[slot] = null;
-        let tv = this[slot];
-        if (tv) {
-            tv.type = LUA_TNUMFLT;
-            tv.value = val;
-        }
+        this.dropView(slot);
     }
 
     setInteger(slot, val) {
         this.tags[slot] = LUA_TNUMINT;
-        const bVal = typeof val === "bigint" ? val : BigInt(val);
-        this.valsI64[slot] = bVal;
+        this.valsI64[slot] = typeof val === "bigint" ? val : BigInt(val);
         this.refs[slot] = null;
-        let tv = this[slot];
-        if (tv) {
-            tv.type = LUA_TNUMINT;
-            tv.value = bVal;
-        }
+        this.dropView(slot);
     }
 
     setObject(slot, tag, obj) {
         this.tags[slot] = tag;
         this.valsF64[slot] = (tag === LUA_TBOOLEAN && obj) ? 1 : 0;
         this.refs[slot] = obj;
-        let tv = this[slot];
-        if (tv) {
-            tv.type = tag;
-            tv.value = (tag === LUA_TBOOLEAN) ? (obj ? true : false) : obj;
-        }
+        this.dropView(slot);
     }
 
     setNil(slot) {
         this.tags[slot] = LUA_TNIL;
         this.valsF64[slot] = 0;
         this.refs[slot] = null;
-        let tv = this[slot];
-        if (tv) {
-            tv.type = LUA_TNIL;
-            tv.value = null;
-        }
+        this.dropView(slot);
     }
 
     setBoolean(slot, b) {
         this.tags[slot] = LUA_TBOOLEAN;
         this.valsF64[slot] = b ? 1 : 0;
         this.refs[slot] = null;
-        let tv = this[slot];
-        if (tv) {
-            tv.type = LUA_TBOOLEAN;
-            tv.value = b ? true : false;
-        }
+        this.dropView(slot);
     }
 
     getTValue(slot) {
-        let tv = this[slot];
         const tag = this.tags[slot];
         const val = (tag === LUA_TNUMINT) ? this.valsI64[slot] :
             (tag === LUA_TNUMFLT) ? this.valsF64[slot] :
                 (tag === LUA_TNIL ? null :
                     (tag === LUA_TBOOLEAN ? (this.valsF64[slot] !== 0) : this.refs[slot]));
+        let tv = this.views[slot];
         if (!tv) {
-            tv = this[slot] = new lobject.TValue(tag, val);
+            tv = this.pool ? this.pool.acquire(tag, val) : new lobject.TValue(tag, val);
+            this.views[slot] = tv;
         } else {
             tv.type = tag;
             tv.value = val;
@@ -119,19 +106,21 @@ class StackSoA extends Array {
         return tv;
     }
 
+    /* Array.prototype.slice skips proxy traps, so materialize views explicitly. */
+    slice(start, end) {
+        const len = this.length;
+        let from = start === undefined ? 0 : (start < 0 ? Math.max(len + start, 0) : Math.min(start, len));
+        let to = end === undefined ? len : (end < 0 ? Math.max(len + end, 0) : Math.min(end, len));
+        const out = new Array(Math.max(to - from, 0));
+        for (let i = from; i < to; i++) out[i - from] = this.getTValue(i);
+        return out;
+    }
+
     copy(dstSlot, srcSlot) {
         this.tags[dstSlot] = this.tags[srcSlot];
         this.valsF64[dstSlot] = this.valsF64[srcSlot];
         this.refs[dstSlot] = this.refs[srcSlot];
-        let dst = this[dstSlot];
-        if (dst) {
-            const tag = this.tags[dstSlot];
-            dst.type = tag;
-            dst.value = (tag === LUA_TNUMINT) ? this.valsI64[dstSlot] :
-                (tag === LUA_TNUMFLT) ? this.valsF64[dstSlot] :
-                    (tag === LUA_TNIL ? null :
-                        (tag === LUA_TBOOLEAN ? (this.valsF64[dstSlot] !== 0) : this.refs[dstSlot]));
-        }
+        this.dropView(dstSlot);
     }
 
     grow(newCapacity) {
@@ -155,13 +144,15 @@ class StackSoA extends Array {
         this.valsI64 = newValsI64;
 
         this.refs.length = newCapacity;
+        this.views.length = newCapacity;
         for (let i = oldCapacity; i < newCapacity; i++) {
             this.refs[i] = null;
+            this.views[i] = null;
         }
     }
 
     syncFromTValue(slot) {
-        let tv = this[slot];
+        let tv = this.views[slot];
         if (!tv) return;
         this.tags[slot] = tv.type;
         if (tv.type === LUA_TNUMINT) {
@@ -185,6 +176,39 @@ class StackSoA extends Array {
         }
     }
 }
+
+const stackIndex = function(prop) {
+    let n;
+    if (typeof prop === 'number') n = prop;
+    else if (typeof prop === 'string') {
+        if (prop.length === 0) return -1;
+        n = +prop;
+        if (String(n) !== prop) return -1;
+    } else return -1;
+    if (!Number.isInteger(n) || n < 0) return -1;
+    return n;
+};
+
+const stackProxy = {
+    get(target, prop, receiver) {
+        const i = stackIndex(prop);
+        if (i >= 0) {
+            if (i >= target.length) return undefined;
+            return target.getTValue(i);
+        }
+        return Reflect.get(target, prop, receiver);
+    },
+    set(target, prop, value, receiver) {
+        const i = stackIndex(prop);
+        if (i >= 0) {
+            target.views[i] = value;
+            if (value && typeof value.ttnov === 'function')
+                target.syncFromTValue(i);
+            return true;
+        }
+        return Reflect.set(target, prop, value, receiver);
+    }
+};
 
 class CallFrameStack {
     constructor(maxFrames = 256) {
@@ -223,6 +247,14 @@ class CallFrameStack {
         this.ci_buffer = newBuf;
         this.maxFrames = newCap >>> 3;
         this.ci_closures.length = this.maxFrames;
+    }
+
+    /* Write the live cursor back. The inner loop keeps these in locals. */
+    saveCursor(base, top, pc) {
+        const fp = this.ptr - 8;
+        this.ci_buffer[fp + 1] = base;
+        this.ci_buffer[fp + 2] = top;
+        this.ci_buffer[fp + 3] = pc;
     }
 }
 
@@ -284,6 +316,7 @@ class lua_State {
         this.status = LUA_OK;
         this.errfunc = 0;
         this.cfs = new CallFrameStack(256);
+        this.openUpvals = new Map();
     }
 
 }
@@ -322,9 +355,11 @@ const luaE_freeCI = function(L) {
 };
 
 const stack_init = function(L1, L) {
-    L1.stack = new StackSoA(BASIC_STACK_SIZE);
+    const raw = new StackSoA(BASIC_STACK_SIZE);
+    raw.pool = L1.l_G.tvalue_pool;
+    L1.stack = new Proxy(raw, stackProxy);
     for (let i = 0; i < BASIC_STACK_SIZE; i++)
-        L1.stack[i] = new lobject.TValue(LUA_TNIL, null);
+        L1.stack.setNil(i);
     L1.top = 0;
     L1.stack_last = BASIC_STACK_SIZE - EXTRA_STACK;
     /* initialize first ci */
@@ -332,7 +367,7 @@ const stack_init = function(L1, L) {
     ci.next = ci.previous = null;
     ci.callstatus = 0;
     ci.funcOff = L1.top;
-    ci.func = L1.stack[L1.top];
+    ci.func = L1.stack.getTValue(L1.top);
     L1.top++;
     ci.top = L1.top + LUA_MINSTACK;
     L1.ci = ci;

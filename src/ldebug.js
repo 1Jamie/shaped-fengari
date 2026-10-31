@@ -41,7 +41,10 @@ const currentpc = function(ci) {
 };
 
 const currentline = function(ci) {
-    return ci.func.value.p.lineinfo.length !== 0 ? ci.func.value.p.lineinfo[currentpc(ci)] : -1;
+    const lineinfo = ci.func.value.p.lineinfo;
+    if (lineinfo.length === 0) return -1;
+    const line = lineinfo[currentpc(ci)];
+    return line === undefined ? -1 : line;
 };
 
 /*
@@ -54,7 +57,7 @@ const swapextra = function(L) {
     if (L.status === LUA_YIELD) {
         let ci = L.ci;  /* get function that yielded */
         let temp = ci.funcOff;  /* exchange its 'func' and 'extra' values */
-        ci.func = L.stack[ci.extra];
+        ci.func = L.stack.getTValue(ci.extra);
         ci.funcOff = ci.extra;
         ci.extra = temp;
     }
@@ -657,9 +660,11 @@ const luaG_traceexec = function(L) {
         if (counthook)
             L.hookcount = 1;  /* undo decrement to zero */
         ci.l_savedpc--;  /* undo increment (resume will increment it again) */
+        if (L.cfs && L.cfs.ptr >= 8)
+            L.cfs.ci_buffer[L.cfs.ptr - 5] = ci.l_savedpc;
         ci.callstatus |= lstate.CIST_HOOKYIELD;  /* mark that it yielded */
         ci.funcOff = L.top - 1;  /* protect stack below results */
-        ci.func = L.stack[ci.funcOff];
+        ci.func = L.stack.getTValue(ci.funcOff);
         ldo.luaD_throw(L, LUA_YIELD);
     }
 };

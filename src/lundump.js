@@ -226,6 +226,7 @@ class BytecodeParser {
         this.LoadUpvalues(f);
         this.LoadProtos(f);
         this.LoadDebug(f);
+        lfunc.luaF_finishproto(f);
     }
 
     checkliteral(s, msg) {
@@ -281,7 +282,7 @@ const luaU_undump = function(L, Z, name) {
     S.checkHeader();
     let cl = lfunc.luaF_newLclosure(L, S.LoadByte());
     ldo.luaD_inctop(L);
-    L.stack[L.top-1].setclLvalue(cl);
+    L.stack.getTValue(L.top - 1).setclLvalue(cl);
     if (L.stack.syncFromTValue) L.stack.syncFromTValue(L.top - 1);
     cl.p = new lfunc.Proto(L);
     S.LoadFunction(cl.p, null);

@@ -675,6 +675,7 @@ const close_func = function(ls) {
     luaK_ret(fs, 0, 0);  /* final return */
     leaveblock(fs);
     lua_assert(fs.bl === null);
+    lfunc.luaF_finishproto(fs.f);
     ls.fs = fs.prev;
 };
 
@@ -1655,11 +1656,11 @@ const luaY_parser = function(L, z, buff, dyd, name, firstchar) {
     let funcstate = new FuncState();
     let cl = lfunc.luaF_newLclosure(L, 1);  /* create main closure */
     ldo.luaD_inctop(L);
-    L.stack[L.top-1].setclLvalue(cl);
+    L.stack.getTValue(L.top - 1).setclLvalue(cl);
     if (L.stack.syncFromTValue) L.stack.syncFromTValue(L.top - 1);
     lexstate.h = ltable.luaH_new(L);  /* create table for scanner */
     ldo.luaD_inctop(L);
-    L.stack[L.top-1].sethvalue(lexstate.h);
+    L.stack.getTValue(L.top - 1).sethvalue(lexstate.h);
     if (L.stack.syncFromTValue) L.stack.syncFromTValue(L.top - 1);
     funcstate.f = cl.p = new Proto(L);
     funcstate.f.source = luaS_new(L, name);

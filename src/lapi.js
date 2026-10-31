@@ -215,7 +215,7 @@ const lua_pop = function(L, n) {
 
 const reverse = function(L, from, to) {
     for (; from < to; from++, to--) {
-        let fromtv = L.stack[from];
+        let fromtv = L.stack.getTValue(from);
         let temp = new TValue(fromtv.type, fromtv.value);
         lobject.setobjs2s(L, from, to);
         lobject.setobj2s(L, to, temp);
@@ -523,7 +523,7 @@ const auxgetstr = function(L, t, k) {
     lobject.pushsvalue2s(L, str);
     api_check(L, L.top <= L.ci.top, "stack overflow");
     lvm.luaV_gettable(L, t, L.stack[L.top - 1], L.top - 1);
-    return L.stack[L.top - 1].ttnov();
+    return L.stack.getTValue(L.top - 1).ttnov();
 };
 
 const lua_rawgeti = function(L, idx, n) {
@@ -532,7 +532,7 @@ const lua_rawgeti = function(L, idx, n) {
     api_check(L, t.ttistable(), "table expected");
     lobject.pushobj2s(L, ltable.luaH_getint(t.value, n));
     api_check(L, L.top <= L.ci.top, "stack overflow");
-    return L.stack[L.top - 1].ttnov();
+    return L.stack.getTValue(L.top - 1).ttnov();
 };
 
 const lua_rawgetp = function(L, idx, p) {
@@ -541,14 +541,14 @@ const lua_rawgetp = function(L, idx, p) {
     let k = new TValue(LUA_TLIGHTUSERDATA, p);
     lobject.pushobj2s(L, ltable.luaH_get(L, t.value, k));
     api_check(L, L.top <= L.ci.top, "stack overflow");
-    return L.stack[L.top - 1].ttnov();
+    return L.stack.getTValue(L.top - 1).ttnov();
 };
 
 const lua_rawget = function(L, idx) {
     let t = index2addr(L, idx);
     api_check(L, t.ttistable(t), "table expected");
     lobject.setobj2s(L, L.top - 1, ltable.luaH_get(L, t.value, L.stack[L.top - 1]));
-    return L.stack[L.top - 1].ttnov();
+    return L.stack.getTValue(L.top - 1).ttnov();
 };
 
 // narray and nrec are mostly useless for this implementation
@@ -613,7 +613,7 @@ const lua_setupvalue = function(L, funcindex, n) {
     if (aux) {
         let name = aux.name;
         let val = aux.val;
-        val.setfrom(L.stack[L.top-1]);
+        val.setfrom((L.stack.getTValue) ? L.stack.getTValue(L.top - 1) : L.stack[L.top - 1]);
         --L.top;
         return name;
     }
@@ -658,7 +658,7 @@ const lua_getuservalue = function(L, idx) {
     let uv = o.value.uservalue;
     L.stack[L.top] = new TValue(uv.type, uv.value);
     api_incr_top(L);
-    return L.stack[L.top - 1].ttnov();
+    return L.stack.getTValue(L.top - 1).ttnov();
 };
 
 const lua_gettable = function(L, idx) {
@@ -667,7 +667,7 @@ const lua_gettable = function(L, idx) {
     lvm.luaV_gettable(L, t, key, L.top - 1);
     if (L.stack && L.stack.syncFromTValue)
         L.stack.syncFromTValue(L.top - 1);
-    return L.stack[L.top - 1].ttnov();
+    return L.stack.getTValue(L.top - 1).ttnov();
 };
 
 const lua_getfield = function(L, idx, k) {
@@ -684,7 +684,7 @@ const lua_geti = function(L, idx, n) {
     if (L.stack.setInteger) L.stack.setInteger(L.top, bi);
     api_incr_top(L);
     lvm.luaV_gettable(L, t, L.stack[L.top - 1], L.top - 1);
-    return L.stack[L.top - 1].ttnov();
+    return L.stack.getTValue(L.top - 1).ttnov();
 };
 
 const lua_getglobal = function(L, name) {
@@ -993,7 +993,7 @@ const lua_load = function(L, reader, data, chunkname, mode) {
     let z = new ZIO(L, reader, data);
     let status = ldo.luaD_protectedparser(L, z, chunkname, mode);
     if (status === LUA_OK) {  /* no errors? */
-        let f = L.stack[L.top - 1].value; /* get newly created function */
+        let f = L.stack.getTValue(L.top - 1).value; /* get newly created function */
         if (f.nupvalues >= 1) {  /* does it have an upvalue? */
             /* get global table from registry */
             let gt = L.l_G._globalsTV || ltable.luaH_getint(L.l_G.l_registry.value, LUA_RIDX_GLOBALS);
@@ -1175,7 +1175,7 @@ const lua_upvaluejoin = function(L, fidx1, n1, fidx2, n2) {
     ref1.f.upvals[ref1.i] = up2;
 };
 
-// This functions are only there for compatibility purposes
+// Fengari relies on the host garbage collector. There is no Lua collector to drive.
 const lua_gc = function () {};
 
 const lua_getallocf = function () {

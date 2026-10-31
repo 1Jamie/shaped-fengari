@@ -605,7 +605,7 @@ const luaL_loadbufferx = function(L, buff, size, name, mode) {
                 let cl = lfunc.luaF_newLclosure(L, proto.upvalues.length);
                 cl.p = proto;
                 ldo.luaD_inctop(L);
-                L.stack[L.top - 1].setclLvalue(cl);
+                L.stack.getTValue(L.top - 1).setclLvalue(cl);
                 if (L.stack.syncFromTValue) L.stack.syncFromTValue(L.top - 1);
                 lfunc.luaF_initupvals(L, cl);
                 if (cl.nupvalues >= 1) {

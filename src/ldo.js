@@ -50,20 +50,9 @@ const { MBuffer } = require('./lzio.js');
 const adjust_top = function(L, newtop) {
     if (L.top < newtop) {
         const stack = L.stack;
-        const tags = stack ? stack.tags : null;
         while (L.top < newtop) {
-            let slot = stack[L.top];
-            if (slot) {
-                slot.type = LUA_TNIL;
-                slot.value = null;
-            } else {
-                stack[L.top] = new lobject.TValue(LUA_TNIL, null);
-            }
-            if (tags) {
-                tags[L.top] = LUA_TNIL;
-                stack.valsF64[L.top] = 0;
-                stack.refs[L.top] = null;
-            }
+            if (stack.setNil) stack.setNil(L.top);
+            else stack[L.top] = new lobject.TValue(LUA_TNIL, null);
             L.top++;
         }
     } else {
@@ -76,13 +65,8 @@ const seterrorobj = function(L, errcode, oldtop) {
 
     /* extend stack so that L.stack[oldtop] is sure to exist */
     while (L.top < oldtop + 1) {
-        let slot = L.stack[L.top];
-        if (slot) {
-            slot.type = LUA_TNIL;
-            slot.value = null;
-        } else {
-            L.stack[L.top] = new lobject.TValue(LUA_TNIL, null);
-        }
+        if (L.stack.setNil) L.stack.setNil(L.top);
+        else L.stack[L.top] = new lobject.TValue(LUA_TNIL, null);
         L.top++;
     }
 
@@ -115,12 +99,8 @@ const luaD_reallocstack = function(L, newsize) {
     }
     L.stack.length = newsize;
     for (let i = oldsize; i < newsize; i++) {
-        L.stack[i] = new lobject.TValue(LUA_TNIL, null);
-        if (L.stack.tags) {
-            L.stack.tags[i] = LUA_TNIL;
-            L.stack.valsF64[i] = 0;
-            L.stack.refs[i] = null;
-        }
+        if (L.stack.setNil) L.stack.setNil(i);
+        else L.stack[i] = new lobject.TValue(LUA_TNIL, null);
     }
     L.stack_last = newsize - lstate.EXTRA_STACK;
 };
@@ -187,7 +167,7 @@ const luaD_inctop = function(L) {
 ** calls.) Returns true iff function has been executed (JS function).
 */
 const luaD_precall = function(L, off, nresults) {
-    let func = L.stack[off];
+    let func = (L.stack && L.stack.getTValue) ? L.stack.getTValue(off) : L.stack[off];
 
     switch(func.type) {
         case LUA_TCCL:
@@ -207,6 +187,8 @@ const luaD_precall = function(L, off, nresults) {
             ci.top = L.top + LUA_MINSTACK;
             lua_assert(ci.top <= L.stack_last);
             ci.callstatus = 0;
+            /* Remember the live Lua cursor so an error restores it instead of dropping the caller. */
+            if (L.cfs) ci.cfs_ptr = L.cfs.ptr;
             if (L.hookmask & LUA_MASKCALL)
                 luaD_hook(L, LUA_HOOKCALL, -1);
             let n = f(L); /* do the actual call */
@@ -219,6 +201,21 @@ const luaD_precall = function(L, off, nresults) {
             return true;
         }
         case LUA_TLCL: {
+            /* The interpreter is iterative, so the JS stack no longer bounds Lua recursion.
+               The margin above the limit lets the error handler run; past that, error handling itself failed. */
+            if (L.cfs) {
+                /* Above the old JS stack depth the suite still uses, and below a full stack grow. */
+                const frameLimit = 1000;
+                const depth = L.cfs.ptr >>> 3;
+                if (depth < frameLimit)
+                    L._overflowReported = false;
+                else if (depth > frameLimit + (frameLimit >> 3))
+                    luaD_throw(L, LUA_ERRERR);
+                else if (!L._overflowReported) {
+                    L._overflowReported = true;
+                    ldebug.luaG_runerror(L, to_luastring("stack overflow", true));
+                }
+            }
             let base;
             let p = func.value.p;
             let n = L.top - off - 1;
@@ -228,16 +225,8 @@ const luaD_precall = function(L, off, nresults) {
                 base = adjust_varargs(L, p, n);
             } else {
                 for (; n < p.numparams; n++) {
-                    let slot = L.stack[L.top];
-                    if (slot) {
-                        slot.type = LUA_TNIL;
-                        slot.value = null;
-                    }
-                    if (L.stack.tags) {
-                        L.stack.tags[L.top] = LUA_TNIL;
-                        L.stack.valsF64[L.top] = 0;
-                        L.stack.refs[L.top] = null;
-                    }
+                    if (L.stack.setNil) L.stack.setNil(L.top);
+                    else L.stack[L.top] = new lobject.TValue(LUA_TNIL, null);
                     L.top++;
                 }
                 base = off + 1;
@@ -259,7 +248,8 @@ const luaD_precall = function(L, off, nresults) {
             ci.callstatus = lstate.CIST_LUA;
             if (L.cfs) {
                 ci.cfs_ptr = L.cfs.ptr;
-                L.cfs.push(off, base, ci.top, 0, nresults, lstate.CIST_LUA, func);
+                /* Snapshot the closure. The stack view may be refreshed while the frame runs. */
+                L.cfs.push(off, base, ci.top, 0, nresults, lstate.CIST_LUA, func.value);
             }
             if (L.hookmask & LUA_MASKCALL)
                 callhook(L, ci);
@@ -270,6 +260,12 @@ const luaD_precall = function(L, off, nresults) {
             tryfuncTM(L, off, func);
             return luaD_precall(L, off, nresults);
     }
+};
+
+const publish_results = function(L, from) {
+    if (!L.stack.getTValue) return;
+    if (L.ci.callstatus & lstate.CIST_LUA) return;
+    for (let i = from; i < L.top; i++) L.stack.getTValue(i);
 };
 
 const luaD_poscall = function(L, ci, firstResult, nres) {
@@ -283,7 +279,8 @@ const luaD_poscall = function(L, ci, firstResult, nres) {
 
     let res = ci.funcOff;
     L.ci = ci.previous;
-    if (L.cfs && L.cfs.ptr > 0) {
+    /* Only Lua frames push a typed cursor. A JS call must not pop the caller. */
+    if (L.cfs && (ci.callstatus & lstate.CIST_LUA) && L.cfs.ptr > 0) {
         L.cfs.pop();
     }
 
@@ -293,18 +290,22 @@ const luaD_poscall = function(L, ci, firstResult, nres) {
                 L.stack.copy(res, firstResult);
             }
             L.top = res + 1;
+            publish_results(L, res);
             return true;
         } else if (nres === 0) {
             if (L.stack.setNil)
                 L.stack.setNil(res);
             else
-                L.stack[res].setnilvalue();
+                L.stack.getTValue(res).setnilvalue();
             L.top = res + 1;
+            publish_results(L, res);
             return true;
         }
     }
 
-    return moveresults(L, firstResult, res, nres, wanted);
+    let moved = moveresults(L, firstResult, res, nres, wanted);
+    publish_results(L, res);
+    return moved;
 };
 
 const moveresults = function(L, firstResult, res, nres, wanted) {
@@ -316,7 +317,8 @@ const moveresults = function(L, firstResult, res, nres, wanted) {
                 if (L.stack.setNil)
                     L.stack.setNil(res);
                 else
-                    L.stack[res].setnilvalue();
+                    if (L.stack.setNil) L.stack.setNil(res);
+                    else L.stack.getTValue(res).setnilvalue();
             } else {
                 lobject.setobjs2s(L, res, firstResult); /* move it to proper place */
             }
@@ -397,6 +399,9 @@ const callhook = function(L, ci) {
     }
     luaD_hook(L, hook, -1);
     ci.l_savedpc--;  /* correct 'pc' */
+    /* An error inside the hook synced the bumped pc into the typed frame. */
+    if (L.cfs && ci.cfs_ptr !== undefined && ci.cfs_ptr >= 0)
+        L.cfs.ci_buffer[ci.cfs_ptr + 3] = ci.l_savedpc;
 };
 
 const adjust_varargs = function(L, p, actual) {
@@ -414,7 +419,8 @@ const adjust_varargs = function(L, p, actual) {
             L.stack.setNil(src);
         } else {
             lobject.pushobj2s(L, L.stack[src]);
-            L.stack[src].setnilvalue();
+            if (L.stack.setNil) L.stack.setNil(src);
+            else L.stack.getTValue(src).setnilvalue();
         }
     }
 
@@ -475,7 +481,23 @@ const luaD_call = function(L, off, nResults) {
     L.nCcalls--;
 };
 
+/* The opcode loop keeps pc in a local and in CallInfo. A yield or error
+   resumes from the typed frame, so copy the live cursors across first. */
+const sync_lua_cursors = function(L) {
+    if (!L.cfs) return;
+    const buf = L.cfs.ci_buffer;
+    for (let ci = L.ci; ci !== null; ci = ci.previous) {
+        if (!(ci.callstatus & lstate.CIST_LUA)) continue;
+        const fp = ci.cfs_ptr;
+        if (fp === undefined || fp < 0) continue;
+        buf[fp + 1] = ci.l_base;
+        buf[fp + 2] = ci.top;
+        buf[fp + 3] = ci.l_savedpc;
+    }
+};
+
 const luaD_throw = function(L, errcode) {
+    sync_lua_cursors(L);
     if (L.errorJmp) {  /* thread has an error handler? */
         L.errorJmp.status = errcode;  /* set status */
         throw L.errorJmp;
@@ -597,7 +619,9 @@ const unroll = function(L, ud) {
         if (!(L.ci.callstatus & lstate.CIST_LUA))  /* C function? */
             finishCcall(L, LUA_YIELD);  /* complete its execution */
         else {  /* Lua function */
+            sync_lua_cursors(L);
             lvm.luaV_finishOp(L);  /* finish interrupted instruction */
+            sync_lua_cursors(L);  /* finishOp may skip the following jump */
             lvm.luaV_execute(L);  /* execute down to higher C 'boundary' */
         }
     }
@@ -673,7 +697,7 @@ const resume = function(L, n) {
         lua_assert(L.status === LUA_YIELD);
         L.status = LUA_OK;  /* mark that it is running (again) */
         ci.funcOff = ci.extra;
-        ci.func = L.stack[ci.funcOff];
+        ci.func = L.stack.getTValue(ci.funcOff);
 
         if (ci.callstatus & lstate.CIST_LUA)  /* yielded inside a hook? */
             lvm.luaV_execute(L);  /* just continue running Lua code */
@@ -693,7 +717,6 @@ const resume = function(L, n) {
 
 const lua_resume = function(L, from, nargs) {
     let oldnny = L.nny;  /* save "number of non-yieldable" calls */
-
     if (L.status === LUA_OK) {  /* may be starting a coroutine */
         if (L.ci !== L.base_ci)  /* not in base level? */
             return resume_error(L, "cannot resume non-suspended coroutine", nargs);
@@ -755,7 +778,7 @@ const lua_yieldk = function(L, nresults, ctx, k) {
         if (k !== null)  /* is there a continuation? */
             ci.c_ctx = ctx;  /* save context */
         ci.funcOff = L.top - nresults - 1;  /* protect stack below results */
-        ci.func = L.stack[ci.funcOff];
+        ci.func = L.stack.getTValue(ci.funcOff);
         luaD_throw(L, LUA_YIELD);
     }
 

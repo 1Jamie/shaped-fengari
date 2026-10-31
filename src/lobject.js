@@ -713,14 +713,16 @@ const luaO_pushvfstring = function(L, fmt, argp) {
             case 100 /* ('d').charCodeAt(0) */:
             case 73 /* ('I').charCodeAt(0) */:
                 ldo.luaD_inctop(L);
-                L.stack[L.top-1].setivalue(argp[a++]);
-                luaO_tostring(L, L.stack[L.top-1]);
+                if (L.stack.setInteger) L.stack.setInteger(L.top - 1, argp[a++]);
+                else L.stack.getTValue(L.top - 1).setivalue(argp[a++]);
+                luaO_tostring(L, L.stack.getTValue(L.top - 1));
                 if (L.stack.syncFromTValue) L.stack.syncFromTValue(L.top - 1);
                 break;
             case 102 /* ('f').charCodeAt(0) */:
                 ldo.luaD_inctop(L);
-                L.stack[L.top-1].setfltvalue(argp[a++]);
-                luaO_tostring(L, L.stack[L.top-1]);
+                if (L.stack.setNumber) L.stack.setNumber(L.top - 1, argp[a++]);
+                else L.stack.getTValue(L.top - 1).setfltvalue(argp[a++]);
+                luaO_tostring(L, L.stack.getTValue(L.top - 1));
                 if (L.stack.syncFromTValue) L.stack.syncFromTValue(L.top - 1);
                 break;
             case 112 /* ('p').charCodeAt(0) */: {

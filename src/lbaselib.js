@@ -201,6 +201,7 @@ const opts = [
     "count", "step", "setpause", "setstepmul",
     "isrunning"
 ].map((e) => to_luastring(e));
+
 const luaB_collectgarbage = function(L) {
     luaL_checkoption(L, 1, "collect", opts);
     luaL_optinteger(L, 2, 0);

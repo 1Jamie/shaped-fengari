@@ -772,7 +772,7 @@ const coresume = function(L) {
 };
 
 const obj_at = function(L, k) {
-    return L.stack[L.ci.funcOff + k].value.p;
+    return L.stack.getTValue(L.ci.funcOff + k).value.p;
 };
 
 const setnameval = function(L, name, val) {

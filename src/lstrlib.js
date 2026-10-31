@@ -115,9 +115,10 @@ const str_sub = function(L) {
     let end = posrelat(luaL_optinteger(L, 3, -1), l);
     if (start < 1) start = 1;
     if (end > l) end = l;
-    if (start <= end)
-        lua_pushstring(L, s.subarray(start - 1, (start - 1) + (end - start + 1)));
-    else lua_pushliteral(L, "");
+    if (start <= end) {
+        let len = (end - start + 1);
+        lua_pushlstring(L, s.subarray(start - 1, start - 1 + len), len);
+    } else lua_pushliteral(L, "");
     return 1;
 };
 
@@ -1526,4 +1527,9 @@ const luaopen_string = function(L) {
     return 1;
 };
 
+str_byte._is_str_byte = true;
+str_sub._is_str_sub   = true;
+
 module.exports.luaopen_string = luaopen_string;
+module.exports.str_byte       = str_byte;
+module.exports.str_sub        = str_sub;

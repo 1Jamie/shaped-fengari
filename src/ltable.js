@@ -234,6 +234,7 @@ class Table {
         this.l = void 0; /* last entry */
         this.metatable = null;
         this.flags = ~0;
+        this.last_int_key = 0;
     }
 
     get strong() {
@@ -332,7 +333,7 @@ const luaH_resizearray = function(L, t, nasize) {
         }
 
         // Migrate any integer keys from hash map into newly expanded array partition
-        if (t._strong) {
+        if (t._strong && t._strong.size > 0) {
             for (let i = oldAsize + 1; i <= nasize; i++) {
                 let bi = BigInt(i);
                 let e = t._strong.get(bi) || t._strong.get(i);
@@ -378,7 +379,7 @@ const luaH_resizearray = function(L, t, nasize) {
             }
         }
 
-        if (t._strong) {
+        if (t._strong && t._strong.size > 0) {
             for (let i = oldAsize + 1; i <= nasize; i++) {
                 let bi = BigInt(i);
                 let e = t._strong.get(bi) || t._strong.get(i);
@@ -550,6 +551,7 @@ const luaH_setint_from_stack = function(L, t, key, stack, slotC, isKC, k, kTags,
     }
 
     if (numKey !== null) {
+        t.last_int_key = numKey;
         const idx = numKey - 1;
         if (t.arr) {
             const baseIdx = idx * 2;
@@ -568,9 +570,11 @@ const luaH_setint_from_stack = function(L, t, key, stack, slotC, isKC, k, kTags,
 
     let biKey = typeof key === "bigint" ? key : BigInt(key);
     // Auto-grow array partition if key is positive and within sequential growth bounds
-    if (srcTag !== LUA_TNIL && biKey > 0n && biKey <= 10000n && ((t.asize === 0 && biKey <= 4n) || (biKey <= BigInt(t.asize + 2)))) {
+    if (srcTag !== LUA_TNIL && biKey > 0n && biKey <= 0x3fffffffn && ((t.asize === 0 && biKey <= 4n) || (biKey <= BigInt(t.asize + 2)))) {
         const targetAsize = Number(biKey);
-        luaH_resizearray(L, t, Math.max(4, Math.max(targetAsize, t.asize << 1)));
+        const newAsize = Math.max(4, Math.max(targetAsize, t.asize < 1024 ? (t.asize << 1) : (t.asize + (t.asize >>> 1))));
+        luaH_resizearray(L, t, newAsize);
+        t.last_int_key = targetAsize;
         const newIdx = targetAsize - 1;
         if (t.arr) {
             const baseIdx = newIdx * 2;
@@ -661,6 +665,7 @@ const luaH_setint = function(t, key, value) {
         if (key > 0 && key <= t.asize) numKey = key;
     }
     if (numKey !== null) {
+        t.last_int_key = numKey;
         const idx = numKey - 1;
         if (t.arr) {
             const baseIdx = idx * 2;
@@ -677,9 +682,11 @@ const luaH_setint = function(t, key, value) {
         return;
     }
     let biKey = typeof key === "bigint" ? key : BigInt(key);
-    if (!value.ttisnil() && biKey > 0n && biKey <= 10000n && ((t.asize === 0 && biKey <= 4n) || (biKey <= BigInt(t.asize + 2)))) {
+    if (!value.ttisnil() && biKey > 0n && biKey <= 0x3fffffffn && ((t.asize === 0 && biKey <= 4n) || (biKey <= BigInt(t.asize + 2)))) {
         const targetAsize = Number(biKey);
-        luaH_resizearray(null, t, Math.max(4, Math.max(targetAsize, t.asize << 1)));
+        const newAsize = Math.max(4, Math.max(targetAsize, t.asize < 1024 ? (t.asize << 1) : (t.asize + (t.asize >>> 1))));
+        luaH_resizearray(null, t, newAsize);
+        t.last_int_key = targetAsize;
         const newIdx = targetAsize - 1;
         if (t.arr) {
             const baseIdx = newIdx * 2;
@@ -792,6 +799,14 @@ const luaH_getn = function(t) {
         }
         return i;
     }
+    // Fast path: if t.last_int_key is recorded and valid within array part, check boundary in O(1)
+    if (t.last_int_key > 0 && t.last_int_key < asize) {
+        const k = t.last_int_key;
+        const kNil = t.arr ? (t.arr[(k - 1) * 2] === LUA_TNIL) : (t.arrTags[k - 1] === LUA_TNIL);
+        const nextNil = t.arr ? (t.arr[k * 2] === LUA_TNIL) : (t.arrTags[k] === LUA_TNIL);
+        if (!kNil && nextNil) return k;
+    }
+
     // Boundary lies within the array part: binary search directly
     let i = 0;
     let j = asize + 1;
@@ -918,12 +933,48 @@ const luaH_next = function(L, table, keyI) {
     return true;
 };
 
+const luaH_setlist_from_stack = function(L, t, first, n, stack, baseSlot) {
+    const last = first + n - 1;
+    if (t.asize < last) {
+        luaH_resizearray(L, t, Math.max(last, t.asize < 1024 ? (t.asize << 1) : (t.asize + (t.asize >>> 1))));
+    }
+    t.last_int_key = last;
+    if (t.arr) {
+        for (let j = 0; j < n; j++) {
+            const slot = baseSlot + j;
+            const tag = stack.tags[slot];
+            const ref = stack.refs[slot];
+            const idx = (first - 1 + j) * 2;
+            t.arr[idx] = tag;
+            t.arr[idx + 1] = (ref !== null && ref !== void 0) ? ref : (tag === LUA_TNUMINT ? stack.valsI64[slot] : ((tag === LUA_TBOOLEAN) ? (stack.valsF64[slot] !== 0) : stack.valsF64[slot]));
+        }
+    } else {
+        const arrTags = t.arrTags;
+        const arrValsI64 = t.arrValsI64;
+        const arrValsF64 = t.arrValsF64;
+        const arrRefs = t.arrRefs;
+        for (let j = 0; j < n; j++) {
+            const slot = baseSlot + j;
+            const tag = stack.tags[slot];
+            const ref = stack.refs[slot];
+            const idx = first - 1 + j;
+            arrTags[idx] = tag;
+            if (tag === LUA_TNUMINT) arrValsI64[idx] = stack.valsI64[slot];
+            else if (tag === LUA_TNUMFLT) arrValsF64[idx] = stack.valsF64[slot];
+            else if (tag === LUA_TBOOLEAN) arrValsF64[idx] = stack.valsF64[slot];
+            else arrValsF64[idx] = 0;
+            arrRefs[idx] = ref || null;
+        }
+    }
+};
+
 module.exports.invalidateTMcache = invalidateTMcache;
 module.exports.luaH_get     = luaH_get;
 module.exports.luaH_getint  = luaH_getint;
 module.exports.luaH_getint_isnil = luaH_getint_isnil;
 module.exports.luaH_getint_to_stack = luaH_getint_to_stack;
 module.exports.luaH_setint_from_stack = luaH_setint_from_stack;
+module.exports.luaH_setlist_from_stack = luaH_setlist_from_stack;
 module.exports.luaH_resizearray = luaH_resizearray;
 module.exports.luaH_getn    = luaH_getn;
 module.exports.luaH_getstr  = luaH_getstr;
